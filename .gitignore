@@ -1,0 +1,23 @@
+# ---- Binaries / prebuilt ----
+*.dll
+*.exe
+*.pdb
+*.lib
+*.a
+*.so
+*.dat
+bin/
+
+# ---- Logs / temp ----
+*.log
+_*
+
+# ---- Python ----
+__pycache__/
+*.pyc
+.venv/
+
+# ---- OS ----
+Thumbs.db
+Desktop.ini
+.DS_Store

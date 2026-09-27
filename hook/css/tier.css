@@ -1,0 +1,14 @@
+/* 控件条样式表 · 宽度分档
+
+   窄条上控件会被进度条的 min-width 顶出条外（音频元素普遍窄，视频很少窄，
+   所以这个毛病只显在音频上）。placeBar 按算出来的宽度给条打 data-nmb-narrow /
+   data-nmb-tiny 属性（<240px = tiny，<300px = narrow），这里按档位收掉非必要控件。
+   分档结果缓存在条上，属性只在换档时写一次。 */
+
+/* 窄：收掉音量 */
+[data-nmb-controls][data-nmb-narrow="1"] [data-nmb-vol]{display:none}
+
+/* 极窄：音量与总时长都收掉，进度条给个更小的下限 */
+[data-nmb-controls][data-nmb-tiny="1"] [data-nmb-vol],
+[data-nmb-controls][data-nmb-tiny="1"] [data-nmb-total]{display:none}
+[data-nmb-controls][data-nmb-tiny="1"] [data-nmb-seek]{min-width:56px}

@@ -1,0 +1,324 @@
+{
+ "probe": "fs_rt",
+ "base": {
+  "elRect": [
+   30,
+   80,
+   420,
+   240
+  ],
+  "inWrap": "1",
+  "wrapRect": [
+   30,
+   80,
+   420,
+   240
+  ],
+  "wrapPos": "relative",
+  "wrapFs": "0",
+  "wrapDisplay": "block",
+  "elDisplay": "block",
+  "elPos": "static",
+  "tailRect": [
+   0,
+   320,
+   984,
+   80
+  ],
+  "barRect": [
+   30,
+   282,
+   420,
+   38
+  ],
+  "barInWrap": "1",
+  "barParentTag": "DIV",
+  "barFsbar": "0",
+  "barPos": "absolute",
+  "elFs": "0",
+  "fsLock": "0",
+  "fsElement": "none",
+  "fsMatchTag": "BUTTON",
+  "elStyle": "",
+  "wrapStyle": "",
+  "bodyStyle": "",
+  "htmlStyle": "",
+  "win": [
+   984,
+   661
+  ]
+ },
+ "btnOnclick1": "function",
+ "fs": {
+  "elRect": [
+   0,
+   0,
+   984,
+   661
+  ],
+  "inWrap": "1",
+  "wrapRect": [
+   0,
+   0,
+   984,
+   661
+  ],
+  "wrapPos": "fixed",
+  "wrapFs": "1",
+  "wrapDisplay": "block",
+  "elDisplay": "block",
+  "elPos": "static",
+  "tailRect": [
+   0,
+   320,
+   984,
+   80
+  ],
+  "barRect": [
+   0,
+   623,
+   984,
+   38
+  ],
+  "barInWrap": "1",
+  "barParentTag": "DIV",
+  "barFsbar": "0",
+  "barPos": "absolute",
+  "elFs": "0",
+  "fsLock": "1",
+  "fsElement": "VIDEO",
+  "fsMatchTag": "DIV|BUTTON",
+  "elStyle": "",
+  "wrapStyle": "",
+  "bodyStyle": "",
+  "htmlStyle": "",
+  "win": [
+   984,
+   661
+  ]
+ },
+ "btnSame": "1",
+ "btnOnclick2": "function",
+ "back": {
+  "elRect": [
+   30,
+   80,
+   420,
+   240
+  ],
+  "inWrap": "1",
+  "wrapRect": [
+   30,
+   80,
+   420,
+   240
+  ],
+  "wrapPos": "relative",
+  "wrapFs": "0",
+  "wrapDisplay": "block",
+  "elDisplay": "block",
+  "elPos": "static",
+  "tailRect": [
+   0,
+   320,
+   984,
+   80
+  ],
+  "barRect": [
+   30,
+   282,
+   420,
+   38
+  ],
+  "barInWrap": "1",
+  "barParentTag": "DIV",
+  "barFsbar": "0",
+  "barPos": "absolute",
+  "elFs": "0",
+  "fsLock": "0",
+  "fsElement": "none",
+  "fsMatchTag": "BUTTON",
+  "elStyle": "",
+  "wrapStyle": "",
+  "bodyStyle": "",
+  "htmlStyle": "",
+  "win": [
+   984,
+   661
+  ]
+ },
+ "probeClicks": 1,
+ "usedFsExit": "1",
+ "back2": {
+  "elRect": [
+   30,
+   80,
+   420,
+   240
+  ],
+  "inWrap": "1",
+  "wrapRect": [
+   30,
+   80,
+   420,
+   240
+  ],
+  "wrapPos": "relative",
+  "wrapFs": "0",
+  "wrapDisplay": "block",
+  "elDisplay": "block",
+  "elPos": "static",
+  "tailRect": [
+   0,
+   320,
+   984,
+   80
+  ],
+  "barRect": [
+   30,
+   282,
+   420,
+   38
+  ],
+  "barInWrap": "1",
+  "barParentTag": "DIV",
+  "barFsbar": "0",
+  "barPos": "absolute",
+  "elFs": "0",
+  "fsLock": "0",
+  "fsElement": "none",
+  "fsMatchTag": "BUTTON",
+  "elStyle": "",
+  "wrapStyle": "",
+  "bodyStyle": "",
+  "htmlStyle": "",
+  "win": [
+   984,
+   661
+  ]
+ },
+ "fs2": {
+  "elRect": [
+   0,
+   0,
+   984,
+   661
+  ],
+  "inWrap": "1",
+  "wrapRect": [
+   0,
+   0,
+   984,
+   661
+  ],
+  "wrapPos": "fixed",
+  "wrapFs": "1",
+  "wrapDisplay": "block",
+  "elDisplay": "block",
+  "elPos": "static",
+  "tailRect": [
+   0,
+   320,
+   984,
+   80
+  ],
+  "barRect": [
+   0,
+   623,
+   984,
+   38
+  ],
+  "barInWrap": "1",
+  "barParentTag": "DIV",
+  "barFsbar": "0",
+  "barPos": "absolute",
+  "elFs": "0",
+  "fsLock": "1",
+  "fsElement": "VIDEO",
+  "fsMatchTag": "DIV|BUTTON",
+  "elStyle": "",
+  "wrapStyle": "",
+  "bodyStyle": "",
+  "htmlStyle": "",
+  "win": [
+   984,
+   661
+  ]
+ },
+ "exitCalled": "1",
+ "back3": {
+  "elRect": [
+   30,
+   80,
+   420,
+   240
+  ],
+  "inWrap": "1",
+  "wrapRect": [
+   30,
+   80,
+   420,
+   240
+  ],
+  "wrapPos": "relative",
+  "wrapFs": "0",
+  "wrapDisplay": "block",
+  "elDisplay": "block",
+  "elPos": "static",
+  "tailRect": [
+   0,
+   320,
+   984,
+   80
+  ],
+  "barRect": [
+   30,
+   282,
+   420,
+   38
+  ],
+  "barInWrap": "1",
+  "barParentTag": "DIV",
+  "barFsbar": "0",
+  "barPos": "absolute",
+  "elFs": "0",
+  "fsLock": "0",
+  "fsElement": "none",
+  "fsMatchTag": "BUTTON",
+  "elStyle": "",
+  "wrapStyle": "",
+  "bodyStyle": "",
+  "htmlStyle": "",
+  "win": [
+   984,
+   661
+  ]
+ },
+ "exitApi": {
+  "ownProp": "1",
+  "protoChain": "HTMLDocument=data,no-set,writable < HTMLDocument=none < Document=none < Node=none < EventTarget=none < Object=none",
+  "control": "HTMLDocument:createElement=no,getElementById=no | Document:createElement=yes,getElementById=yes | Node:createElement=no,getElementById=no | EventTarget:createElement=no,getElementById=no | Object:createElement=no,getElementById=no",
+  "isOurFn": "1",
+  "srcPeek": "function(){fsExit();return Promise.resolve()}"
+ },
+ "ok": {
+  "base_inWrap": true,
+  "fs_full": true,
+  "fs_wrapFixed": true,
+  "fs_elStatic": true,
+  "fs_lock": true,
+  "fs_barInWrap": true,
+  "back_inWrap": true,
+  "back_rectSame": true,
+  "back_tailSame": true,
+  "back_noAttr": true,
+  "back_barInWrap": true,
+  "back_styleSame": true,
+  "fs2_full": true,
+  "fs2_wrapFixed": true,
+  "back3_inWrap": true,
+  "back3_rectSame": true,
+  "back3_noAttr": true,
+  "back3_barInWrap": true
+ }
+}

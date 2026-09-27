@@ -1,0 +1,19 @@
+/* 控件条样式表 · 音频条
+
+   <audio> 没有画面，控件条就是这个组件本身，所以比视频那套更紧凑，
+   并且四角一致圆角（视频条是直角，见 base.css 的说明）。
+   这条样式用户已确认满意，改动前先想清楚是不是必要的。
+
+   尺寸口径：原生 <audio controls> 的占位是 54px，而条内容高 38px。
+   元素完整露在视口里时 placeBar 打 data-nmb-fill，条撑满盒子（top:0;bottom:0，
+   在 base.css 里定），所以这里只定横向间距与圆角，不写高度。
+
+   【顺序敏感】下面 4 条与 base.css 同特异度同属性（min-width/width），
+   靠"排在 base 之后拼接"才赢——生成器 CSS_ORDER 表保证 base->tier->audio。
+   文件去前缀后字母序会把 audio 排到 base 前，绝不能按字母序拼。 */
+
+[data-nmb-controls][data-nmb-audio="1"]{gap:8px;border-radius:8px}
+[data-nmb-controls][data-nmb-audio="1"] [data-nmb-cur],
+[data-nmb-controls][data-nmb-audio="1"] [data-nmb-total]{min-width:36px}
+[data-nmb-controls][data-nmb-audio="1"] [data-nmb-seek]{min-width:90px}
+[data-nmb-controls][data-nmb-audio="1"] [data-nmb-vol]{width:52px}

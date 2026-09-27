@@ -1,0 +1,162 @@
+/* 控件条样式表 · 基础（容器/按钮/记号/时间/滑块/压制原生控件）
+
+   真源在本目录：hook/css/*.css。构建时
+   _nmb_gen_hooks_inc.py 按显式顺序表拼成一整段，替换 hook/js/injection.js 里
+   `var NMB_CSS=...` 那一行，再生成 hook/inc/injection.inc。
+   改样式流程：改这里 -> python _nmb_gen_hooks_inc.py -> 编译。
+   改 js 里那行字符串无效，下次生成会被覆盖。
+   文件已去数字前缀：级联顺序由生成器的 CSS_ORDER 表定（base->tier->audio，
+   即原 01/02/03 编号顺序），同名特异度按表序定输赢——别按文件名字母序拼，
+   那会把 audio 错误地排到 base 前面。 */
+
+/* 包装盒：接管时由脚本插在元素原布局位、把元素搬进去（injection.js 的 wrapEl）。
+   video/audio 是替换元素，子元素不渲染，条塞不进元素自己——包装盒就是"元素内部"
+   的替身：position:relative 给条当包含块，line-height:0 消掉行内媒体底下的基线空隙，
+   保证包装盒与元素盒子逐像素重合（条贴盒底才不会差出几像素）。
+   【不要往这条规则上试 CSS Grid】本内核（Chromium 60 / miniblink）**完全没有 grid**：
+   CSS.supports('display','grid') 为 false，写了 display:grid 计算出来仍是 block，
+   同格叠放全部静默失效，条会被挤到元素盒子**下面**去。2026-09-18 实测，六种写法全量
+   对比见 tests/testjs/_nmb_flow_feat.html（唯一在流内叠放成功的是负 margin）。 */
+[data-nmb-wrap]{position:relative;line-height:0}
+/* 行内媒体的"行内身份"由 wrapEl 打 data-nmb-inline 属性传来，具体 display 值在这里定
+   （脚本不再写 display：布局值归样式表，这是用户明确口径）。是 inline-block 而不是
+   inline-grid——理由同上，本内核没有 grid。 */
+[data-nmb-wrap][data-nmb-inline="1"]{display:inline-block}
+/* 包装盒里元素自身的"盒外表现"已由 wrapEl 搬到包装盒上（margin/vertical-align），
+   这里清零元素自己的，防止双重 margin 把元素推离包装盒边缘、条不再贴元素底。
+   站点 !important margin 清不掉时，wrapEl 的逐像素保险会抓到并当场拆包。 */
+[data-nmb-wrap]>[data-native-media]{margin:0!important;vertical-align:top}
+/* 容器：条是包装盒的子元素，位置**全由这条 CSS 相对布局给出**——absolute + inset
+   贴包装盒底边、宽度同盒。布局一动浏览器自己跟（滚动/缩放/改窗口都不需要脚本），
+   脚本不写任何坐标，只打状态属性（显隐/音频撑满/宽度分档），几何照实读 DOM 上报。
+   max-height 夹一层：元素比条还矮时条不撑破元素（overflow:hidden 兜着截断）。
+   all:initial 打头：条挂进 body 深处后，站点的全局选择器（body button、#x input 之类）
+   会摸到条内控件——先一巴掌拍回 initial，再由本条与后续规则逐项立起自己的样子。 */
+[data-nmb-controls]{
+	all:initial;
+	position:absolute;left:0;right:0;bottom:0;top:auto;width:auto;height:auto;max-height:100%;
+	display:flex;align-items:center;gap:9px;padding:6px 10px;box-sizing:border-box;
+	background:rgba(24,24,24,.94);color:#fff;font:12px/1.4 Arial,sans-serif;
+	border-radius:0;box-shadow:0 2px 10px rgba(0,0,0,.45);
+	overflow:hidden;z-index:2147483600;
+}
+/* 条内按钮同样隔离：站点对 button 的全局规则（边框/背景/内边距/字体）不再生效。
+   all:unset 保留从容器继承的字体颜色，display 等由下面各条重立。 */
+[data-nmb-controls] button{all:unset}
+[data-nmb-controls] [data-nmb-fs]{all:unset}
+/* 音频撑满：<audio> 没有画面，条就是这个组件本身；原生 54px 盒里条只占 38px，
+   贴底画会在上方空出 16px 死区（"一条控件条浮在空盒子里"）。盒子完整可见时打
+   data-nmb-fill，这条让它上下都贴盒 → 撑满（JS 只打属性，高度关系在这里）。
+   只有上下一起拉才不依赖"盒高是多少"这个未知量：在流内叠放（负 margin）做不到
+   这件事——要填 54 就得先知道 54，所以这里必须是 inset。 */
+[data-nmb-controls][data-nmb-fill="1"]{top:0;bottom:0;height:auto;max-height:none}
+/* 全屏兜底：正常全屏时是**包装盒**（组件的壳）铺满视口、元素仍是壳的流内子元素，
+   条就留在壳里、还是 absolute 贴壳底——壳=视口所以条=视口底，这条走不到。
+   只有站点把元素挪出包装盒、壳与元素盒子不再重合而全屏还在时，条才改挂文档根按视口贴底
+   （见 placeBar 的重合判定）。元素=视口，贴视口底就是贴元素底，仍然不需要脚本写坐标。 */
+[data-nmb-controls][data-nmb-fsbar="1"]{
+	position:fixed;left:0;right:0;bottom:0;top:auto;max-height:none;
+}
+/* 显隐：JS 只打属性，要不要出现由 CSS 决定。两个属性由两个写入者各管各的——
+   data-nmb-off   = placeBar 的"元素没完整露出来/盒子没尺寸/元素跳出了包装盒"；
+   data-nmb-fshide= fsSyncBars 的"全屏的是别的元素"。分开写，谁也覆盖不掉谁。 */
+[data-nmb-controls][data-nmb-off="1"],
+[data-nmb-controls][data-nmb-fshide="1"]{display:none!important}
+/* 原生控件被藏掉后 <audio> 自身高度会塌成 0，条跟着"露不出来"整条消失：给个下限。
+   值就是条的自然高度；原来由 placeBar 观察到塌陷后写内联 min-height，现在写在样式表里。 */
+[data-native-media]{min-height:38px}
+/* 全屏（最大化）polyfill（见 injection.js 的 fsEnter）："铺满视口"交给 CSS，JS 只打 data-nmb-fs。
+   属性打在**包装盒**（组件的壳）上，fixed 的只是壳——媒体元素自始至终是壳的流内子元素，
+   定位一个字节都不写（用户口径 2026-09-18："这个也修改掉，不要随便脱离流"）。
+   两条原因不能用裸 [data-nmb-fs="1"]：①条上的全屏**按钮**也带这个属性（buildBar 的记号），
+   裸选会把按钮拉成 100vw×100vh；②未包装的退化场景属性落在元素上，本来就不该再有元素版 fixed。
+   !important 压得住站点普通内联样式，压不住站点内联 !important；现有站点没有这种写法。 */
+[data-nmb-fs-host="1"]{
+	position:fixed!important;left:0!important;top:0!important;right:auto!important;bottom:auto!important;
+	width:100vw!important;height:100vh!important;max-width:none!important;max-height:none!important;
+	min-width:0!important;min-height:0!important;margin:0!important;background:#000!important;
+	z-index:2147483647!important;transform:none!important;box-sizing:border-box!important;
+	border:0!important;padding:0!important;overflow:hidden!important;display:block!important;
+}
+/* 壳铺满后把媒体元素撑到跟壳一样大：站点常见的 max-width/max-height 与尺寸约束全部解除
+   （含基 CSS 自己那条 min-height:38px 下限），margin/border/padding 清零防双重间距，
+   黑底兜住视频帧的加载间隙（帧由 native 合成在元素 rect 上，rect=视口即自动铺满）。 */
+[data-nmb-fs-host="1"]>[data-native-media],
+[data-nmb-fs-host="1"]>[data-nmb-wrap]>[data-native-media]{
+	width:100%!important;height:100%!important;max-width:none!important;max-height:none!important;
+	min-width:0!important;min-height:0!important;margin:0!important;border:0!important;padding:0!important;
+	background:#000!important;
+}
+/* 全屏时锁页面滚动（原来 JS 写 body 内联 overflow） */
+html[data-nmb-fs-lock="1"],html[data-nmb-fs-lock="1"] body{overflow:hidden!important}
+html[data-nmb-fs-lock="1"]{transform:none!important;filter:none!important;perspective:none!important}
+[data-nmb-fs-host="1"]>[data-nmb-wrap]{width:100%!important;height:100%!important}
+[data-nmb-fs-host="1"] [data-nmb-controls][data-nmb-fsbar="1"]{z-index:2147483647!important}
+/* 视频条不圆角：压在画面底边上，圆角会在两侧露出画面尖角。音频条四角都圆，见 audio.css */
+
+/* 播放/暂停、全屏按钮 */
+[data-nmb-controls] button{
+	display:flex;align-items:center;justify-content:center;
+	padding:0;border:0;background:transparent;color:#fff;cursor:pointer;
+}
+[data-nmb-controls] [data-nmb-play]{width:26px;height:26px}
+[data-nmb-controls] [data-nmb-fs]{padding:2px 4px;font-size:14px}
+
+/* 记号：按钮里唯一那个 <i>，纯 CSS 图形（三角=播放，双竖条=暂停）。
+   不能用 SVG（内核 SVG 支持不牢，会整块画不出来只剩空框）。
+   syncBar 只切 class：nmb-mark-play / nmb-mark-pause，形状别写回 JS。 */
+[data-nmb-controls] i.nmb-mark{display:block;padding:0;border:0 solid transparent;background:currentColor}
+[data-nmb-controls] i.nmb-mark-play{
+	width:0;height:0;margin-left:3px;
+	border-left:10px solid currentColor;border-top:6px solid transparent;border-bottom:6px solid transparent;
+}
+[data-nmb-controls] i.nmb-mark-pause{
+	width:11px;height:12px;
+	/* 双竖条同样不能用 "颜色 起 止" 的双位置断点（CSS Images 4 要 Chrome 71+；内核是 Chromium 60
+	   时整条渐变作废，记号只剩基础规则的实心方块）。每段两端各写一个断点，老内核才认。 */
+	background:linear-gradient(90deg,currentColor 0%,currentColor 36%,transparent 36%,transparent 64%,currentColor 64%,currentColor 100%);
+}
+
+/* 时间：定宽，数字跳变时布局不抖 */
+[data-nmb-controls] [data-nmb-cur],[data-nmb-controls] [data-nmb-total]{min-width:40px;font-family:Arial,sans-serif;font-size:12px}
+[data-nmb-controls] [data-nmb-cur]{text-align:right}
+
+/* 进度条 / 音量条。容器上的 overflow:hidden 是硬保险：滑块 min-width 撑着不收缩，
+   条一窄后面的控件就整块溢到条外（音频元素普遍窄，所以只显在音频上）。
+   两个滑块盒子都写 height:14px（不是轨道那 4px）：盒子要给圆形滑块头留出高度，
+   轨道高度由下面伪元素自己的 height 定。 */
+[data-nmb-controls] [data-nmb-seek]{flex:1;min-width:110px;height:14px;border:0;padding:0;background:transparent;accent-color:#1a73e8;cursor:pointer}
+/* 音量条原来只有 accent-color，而本内核（Chromium 60 / miniblink）不认它（Chrome 93+ 才有），
+   等于没写、整个滑块是内核默认外观。颜色一律交给下面 .nmb-vol 的伪元素与 paintTrack。 */
+[data-nmb-controls] [data-nmb-vol]{width:70px;height:14px;border:0;padding:0;background:transparent;cursor:pointer}
+
+/* 进度条轨道要同时画"已播/已缓冲"两段，range 的轨道颜色只能靠伪元素给。
+   这里只管几何与"还没喂数据"时的回退色；三段渐变（蓝/浅/深）由 injection.js 的 paintTrack
+   每帧写进一条特异度更高的同类规则 —— 内核丢弃 setProperty 写的自定义属性，
+   所以不再用 --nmb-track 传值（原因见 paintTrack 上方的注释）。 */
+.nmb-seek{-webkit-appearance:none;appearance:none;background:transparent;height:14px}
+.nmb-seek:focus{outline:none}
+.nmb-seek::-webkit-slider-runnable-track{height:4px;border-radius:2px;background:rgba(255,255,255,.16)}
+.nmb-seek::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;margin-top:-4px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.5)}
+.nmb-seek::-moz-range-track{height:4px;border-radius:2px;background:rgba(255,255,255,.16)}
+.nmb-seek::-moz-range-thumb{width:12px;height:12px;border:0;border-radius:50%;background:#fff}
+
+/* 音量条：拖过的一段（= 已经到这个音量）实白，没拖过的一段灰。"拖过/没拖过"的分界线
+   每帧都在动，只能由脚本喂给伪元素，所以填充串由 injection.js 的 paintTrack 写进一条
+   特异度更高的同类规则（与进度条共用一条通路，理由见上面那段注释）；
+   这里只给几何与回退色。条底色是 rgba(24,24,24,.94)，所以纯白读起来就是"实白"，
+   白色低透明度叠在深底上就是灰。 */
+.nmb-vol{-webkit-appearance:none;appearance:none;background:transparent;height:14px}
+.nmb-vol:focus{outline:none}
+.nmb-vol::-webkit-slider-runnable-track{height:4px;border-radius:2px;background:rgba(255,255,255,.28)}
+.nmb-vol::-webkit-slider-thumb{-webkit-appearance:none;width:10px;height:10px;margin-top:-3px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.5)}
+.nmb-vol::-moz-range-track{height:4px;border-radius:2px;background:rgba(255,255,255,.28)}
+.nmb-vol::-moz-range-thumb{width:10px;height:10px;border:0;border-radius:50%;background:#fff}
+
+/* 内核自带的原生小部件整块关掉：它是元素的影子 DOM，躲在元素自己盒子里，
+   本模块的条只是叠在上面 —— 尺寸或滚动错位就露出半个原生控件。
+   miniblink 不一定吃这层（影子伪元素可能整个被裁），所以 adopt() 里对 <audio>
+   还有一层 opacity:0 的兜底，两处一起关掉才算干净。 */
+[data-native-media]::-webkit-media-controls,
+[data-native-media]::-webkit-media-controls-enclosure,
+[data-native-media]::-webkit-media-controls-panel{display:none!important;-webkit-appearance:none!important}

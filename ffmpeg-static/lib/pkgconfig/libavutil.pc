@@ -1,0 +1,14 @@
+prefix=F:/ffbuild/prefix
+exec_prefix=${prefix}
+libdir=F:/ffbuild/prefix/lib
+includedir=F:/ffbuild/prefix/include
+
+Name: libavutil
+Description: FFmpeg utility library
+Version: 61.1.100
+Requires: 
+Requires.private: 
+Conflicts:
+Libs: -L${libdir}  -lavutil -lm -luser32 -lbcrypt -latomic
+Libs.private: 
+Cflags: -I${includedir}

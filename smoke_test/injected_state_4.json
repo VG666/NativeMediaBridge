@@ -1,0 +1,122 @@
+{
+ "round": 4,
+ "t": 9171,
+ "href": "file:///F:/%E7%BC%96%E7%A8%8B/MBPython-master/NativeMediaBridge-%E6%B3%A8%E8%A7%A3%E7%89%88/tests/testjs/_nmb_bar_diag.html",
+ "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/60.0.3729.169 Safari/537.36",
+ "media": [
+  {
+   "id": "v1",
+   "rect": [
+    20,
+    20,
+    944,
+    472
+   ],
+   "hooked": true,
+   "native": "1",
+   "off": 0,
+   "wrap": true,
+   "wrapRect": [
+    20,
+    20,
+    944,
+    472
+   ],
+   "barAttr": true,
+   "clip": [
+    20,
+    20,
+    944,
+    472
+   ],
+   "barRect": [
+    20,
+    454,
+    944,
+    38
+   ],
+   "state": {
+    "duration": 20,
+    "position": 8.417,
+    "buffered": 0,
+    "bufferedUntil": 20,
+    "paused": false,
+    "ready": true
+   },
+   "raw": {
+    "ok": true,
+    "duration": 20,
+    "position": 8.417,
+    "buffered": 0,
+    "bufferedUntil": 20,
+    "read": 1263665,
+    "paused": 0,
+    "ended": 0,
+    "error": 0,
+    "stalled": 0,
+    "audio": 1,
+    "video": 1,
+    "vw": 480,
+    "vh": 240,
+    "apos": 8.382
+   }
+  }
+ ],
+ "hasBar": true,
+ "barRect": [
+  20,
+  454,
+  944,
+  38
+ ],
+ "barHTML": "<div data-nmb-controls=\"1\" class=\"__nmb-h\"><button type=\"button\" aria-label=\"暂停\" data-nmb-play=\"1\" title=\"暂停\"><i class=\"nmb-mark nmb-mark-pause\"></i></button><span data-nmb-cur=\"1\">0:08</span><input type=\"range\" min=\"0\" max=\"1000\" step=\"1\" aria-label=\"进度\" class=\"nmb-seek __nmb-h\" data-nmb-seek=\"1\" data-nmb-track-id=\"nmb-t1\" title=\"已缓冲到 0:20\"><span data-nmb-total=\"1\">0:20</span><input type=\"range\" min=\"0\" max=\"100\" step=\"1\" aria-label=\"音量\" data-nmb-vol=\"1\" class=\"\"><button type=\"button\" aria-label=\"全屏\" data-nmb-fs=\"1\" class=\"\">⛶</button></div>",
+ "seekRect": [
+  98,
+  466,
+  720,
+  14
+ ],
+ "seek": {
+  "tag": "INPUT",
+  "type": "range",
+  "value": "421",
+  "varTrack": null,
+  "customProp": null,
+  "elemBgImage": "none",
+  "elemAppearance": "none",
+  "rect": [
+   98,
+   466,
+   720,
+   14
+  ]
+ },
+ "trackCSS": {
+  "bg": "rgba(0, 0, 0, 0) none repeat scroll 0% 0% / auto padding-box border-box",
+  "bgImage": "none",
+  "height": "14px"
+ },
+ "refA": [
+  24,
+  604,
+  300,
+  8
+ ],
+ "refB": [
+  26,
+  614,
+  300,
+  14
+ ],
+ "refBRectCSS": {
+  "bg": "rgba(0, 0, 0, 0) none repeat scroll 0% 0% / auto padding-box border-box",
+  "bgImage": "none",
+  "height": "14px"
+ },
+ "refBRuleBg": "linear-gradient(90deg, rgb(26, 115, 232) 0%, rgb(26, 115, 232) 30%, rgba(255, 255, 255, 0.498039) 30%, rgba(255, 255, 255, 0.498039) 60%, rgba(255, 255, 255, 0.156863) 60%, rgba(255, 255, 255, 0.156863) 100%)",
+ "trackRule": {
+  "id": "nmb-t1",
+  "sel": "[data-nmb-controls] .nmb-seek[data-nmb-track-id=\"nmb-t1\"]::-webkit-slider-runnable-track",
+  "bg": "linear-gradient(90deg, rgb(26, 115, 232) 0%, rgb(26, 115, 232) 42.09%, rgba(255, 255, 255, 0.498039) 42.09%, rgba(255, 255, 255, 0.498039) 100%, rgba(255, 255, 255, 0.156863) 100%, rgba(255, 255, 255, 0.156863) 100%)"
+ }
+}

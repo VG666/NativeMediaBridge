@@ -1,0 +1,1034 @@
+(function(){
+  if(window.__nmbInstalled)return;window.__nmbInstalled=true;
+    // 这段会在脚本上下文刚建立时就执行（见 onScriptContext），那时文档里可能一个节点都还没有。
+    // 整体兜住异常并在出错时复位标记，保证后面还有机会重新注入。
+  try{
+    var seq=0;
+    
+      // ── Fullscreen API polyfill ──────────────────────────────────────────────
+      // 离屏内核没有真实顶层窗口：实测 el.requestFullscreen() 返回的 Promise 必 reject(TypeError)，
+      // document.fullscreenElement 恒为 null、fullscreenchange 从不触发。站点播放器(B站 bpx-player /
+      // 腾讯 thumbplayer)和原生控件的全屏按钮因此点了毫无反应。
+      // 用"页面内全屏"模拟：给目标元素 fixed 铺满视口，再按标准派发 fullscreenchange —— 播放器靠这个
+      // 事件给自己加全屏 class（bpx-player-state-fullscreen 等）、重排控件；元素 rect 变大后桥的
+      // syncAll 会按新 rect 上报，ffmpeg 帧自动铺满（与窗口缩放同一条已验证链路）。宿主窗口本身仍可
+      // 由用户用系统最大化按钮放大，视觉上与真全屏一致。
+    var fsElement=null;
+    function fsDispatch(){
+      try{document.dispatchEvent(new Event('fullscreenchange',{bubbles:true}))}catch(e){}
+      try{document.dispatchEvent(new Event('webkitfullscreenchange',{bubbles:true}))}catch(e){}
+    }
+    function fsEnter(el){
+      if(!el||fsElement===el)return;
+      if(fsElement)fsExit();
+      fsElement=el;
+        // 原样保存 style 属性（null 表示进入前没有 style），退出时逐字恢复。
+      el.__nmbFsStyle=el.getAttribute('style');
+      el.style.cssText+=';position:fixed!important;left:0!important;top:0!important;right:auto!important;bottom:auto!important;width:100vw!important;height:100vh!important;max-width:none!important;max-height:none!important;min-width:0!important;min-height:0!important;margin:0!important;border:0!important;padding:0!important;background:#000!important;z-index:2147483000!important';
+        // z-index 低于桥控件条(2147483600)：全屏后桥给裸 video 建的控件条仍要浮在画面之上。
+      if(document.body)document.body.style.setProperty('overflow','hidden');
+      fsDispatch();
+      fsSyncBars();
+        // fixed 改尺寸不触发 resize，而播放器全屏后普遍监听 window resize 重算控件/弹幕区尺寸，手动补发。
+      try{window.dispatchEvent(new Event('resize'))}catch(e){}
+    }
+    function fsExit(){
+      var el=fsElement;
+      if(!el)return;
+      fsElement=null;
+      var old=el.__nmbFsStyle;
+      if(old==null)el.removeAttribute('style');else el.setAttribute('style',old);
+      if(document.body)document.body.style.removeProperty('overflow');
+      fsDispatch();
+      fsSyncBars();
+      try{window.dispatchEvent(new Event('resize'))}catch(e){}
+    }
+      // 全屏时把其他媒体的桥控件条藏掉：它们的 z-index 比全屏层高（否则会被视频帧盖死），
+      // 不藏就会漂在全屏画面上（如页面下方的音频条）。全屏元素自身/其内部媒体的条保留。
+    function fsSyncBars(){
+      var el=fsElement;
+      var bars=document.querySelectorAll('[data-nmb-controls]');
+      for(var i=0;i<bars.length;i++){
+        var bar=bars[i],owner=bar.__nmbOwner,keep=1;
+        if(el&&owner)keep=(el===owner||(el.contains&&el.contains(owner)))?1:0;
+        bar.style.display=keep?'':'none';
+      }
+    }
+    try{
+      Object.defineProperty(document,'fullscreenElement',{configurable:true,get:function(){return fsElement}});
+      Object.defineProperty(document,'webkitFullscreenElement',{configurable:true,get:function(){return fsElement}});
+      Object.defineProperty(document,'webkitCurrentFullScreenElement',{configurable:true,get:function(){return fsElement}});
+      Object.defineProperty(document,'fullscreenEnabled',{configurable:true,get:function(){return true}});
+      Object.defineProperty(document,'webkitFullscreenEnabled',{configurable:true,get:function(){return true}});
+      Element.prototype.requestFullscreen=function(){fsEnter(this);return Promise.resolve()};
+      Element.prototype.webkitRequestFullscreen=Element.prototype.requestFullscreen;
+      Element.prototype.webkitRequestFullScreen=Element.prototype.requestFullscreen;
+      document.exitFullscreen=function(){fsExit();return Promise.resolve()};
+      document.webkitExitFullscreen=document.exitFullscreen;
+      document.webkitCancelFullScreen=document.exitFullscreen;
+        // ESC：标准浏览器由系统拦截 ESC 退出全屏，页面随后才收到键；这里在捕获阶段自己退一次（幂等），
+        // 不 stopPropagation —— 播放器自身的 ESC 监听照常运行，fsExit 的 fullscreenchange 会同步它的状态。
+      document.addEventListener('keydown',function(e){
+        if(fsElement&&(e.key==='Escape'||e.keyCode===27))fsExit();
+      },true);
+    }catch(e){}
+    window.__nmbFsExit=fsExit; // 供诊断/原生侧在需要时强制退出
+      // ── Fullscreen polyfill 结束 ──────────────────────────────────────────────
+    
+      // 每个媒体元素对应一份由原生解码器驱动的虚拟播放状态。
+    function st(el){return el.__nmbState||(el.__nmbState={duration:0,position:0,paused:true,ended:false,ready:false,error:false,endedFired:false})}
+    function fire(el,names){for(var i=0;i<names.length;i++){try{el.dispatchEvent(new Event(names[i]))}catch(e){}}}
+      // 把真实播放状态写回元素的虚拟状态；fireEvents 只在位置/状态的例行回读时打开，
+      // 否则每次播放暂停都会往页面里灌一串 timeupdate。
+    function applyState(el,data,fireEvents){
+      if(!data||typeof data.duration!=='number')return;
+      var s=st(el);
+        // 原样留一份应答：套件要读 audio/apos/aerr 这类字段，而 st(el) 只挑走它自己用得到的几个。
+        // 页面侧脚本拿不到注入闭包里的 st()，但能通过 el.__nmbState 读到这份原样应答。
+      s.raw=data;
+      var before=s.duration;
+      if(data.duration>0)s.duration=data.duration;
+      if(typeof data.position==='number'&&!el.__nmbSeeking)s.position=data.position;
+      s.paused=!!data.paused;s.ended=!!data.ended;s.error=!!data.error;
+        // 读前缓冲水位（秒，领先播放多少）：测试用它判断源站够不够快。
+      if(typeof data.buffered==='number')s.buffered=data.buffered;
+        // 已缓冲到的绝对时间点（秒）：控件条画"已缓冲"那一段用它，见 syncBar。
+      if(typeof data.bufferedUntil==='number')s.bufferedUntil=data.bufferedUntil;
+      if(data.video||data.audio)s.ready=true;
+      if(fireEvents&&s.ready){
+        if(s.duration!==before&&s.duration>0)fire(el,['durationchange']);
+        fire(el,['timeupdate']);
+        if(s.ended&&!s.endedFired){s.endedFired=true;fire(el,['ended'])}
+      }
+        // 其余边沿事件（loadedmetadata/loadeddata/canplay/canplaythrough/progress/error）统一走 advance，
+        // 它定义在下面那段字面量的拼接处——函数声明会提升，这里调用时它已经就位。
+        // error 不看 fireEvents：解码中途失败时页面可能一次例行回读都没赶上，这条不能漏。
+      if(fireEvents||s.error)advance(el,s,data);
+    }
+      // 一次桥请求。内核换成 mb 接口后，页面→native 只能走 window.mbQuery，
+      // 它的回调是异步的，所以凡是"拿到结果之后才能做的事"都必须放进 done 回调里。
+      // 字段用制表符拼接，顺序与 native 侧 splitFields 的取值一一对应。
+    var querySeq=0;
+    function send(el,op,value,done,fireEvents){
+      var id=el.__nmbId||(el.__nmbId='nmb-'+(++seq));
+      var r=el.getBoundingClientRect();
+      var src=String(el.currentSrc||el.src||el.getAttribute('src')||'').replace(/[\t\r\n]/g,'');
+      var ua=String(navigator.userAgent||'').replace(/[\t\r\n]/g,'');
+        // Referer 必须是**当前文档**的地址，而不是 document.referrer —— 后者是"上一页"，
+        // 直接打开链接（测试脚本、粘贴地址）时恒为空串，等于一个 Referer 都不发。
+        // 站点的防盗链正是按它判的：B站 CDN 同一条地址实测"无 Referer → 403 / 带 Referer → 200"，
+        // 这也是"抓到了地址却打不开（403/404）"的直接原因。iframe 里的媒体报的是 iframe 自己的地址，
+        // 与真实浏览器一致。fragment 要去掉，Referer 里不允许带 '#'。file:// 这类不上报，免得递一个 CDN 认不得的值。
+      var ref='';try{if(/^https?:/i.test(location.protocol))ref=String(location.href||'').split('#')[0].replace(/[\t\r\n]/g,'')}catch(e){}
+      var origin=String(location.origin||'').replace(/[\t\r\n]/g,'');
+      var cookie='';try{cookie=String(document.cookie||'').replace(/[\t\r\n]/g,'')}catch(e){}
+      var b=el.__nmbBarRect||[0,0,0,0];
+      var req=[op,id,el.tagName.toLowerCase(),src,String(value==null?'':value),ua,ref,cookie,origin,
+        String(r.left),String(r.top),String(r.width),String(r.height),
+        String(b[0]),String(b[1]),String(b[2]),String(b[3])].join('\t');
+      try{
+        window.mbQuery(++querySeq,req,function(customMsg,response){
+          var data;try{data=JSON.parse(String(response==null?'':response)||'{}')}catch(e){data={ok:false}}
+            // native 那边已经不认这个元素了（条目被清掉或被释放，应答 missing:1）：退回"未接管"，
+            // 让 tick 下一帧重新 open。否则元素会永久停在"接管了但什么都不动"——控件条画着、点了没反应，
+            // 比不接管更难查。open 自己回的 missing 不走这里：那条路径另有 skip/退避处理。
+          if(data.missing&&op!=='open')forget(el);
+          applyState(el,data,fireEvents);
+          if(done)done(el,data);
+        });
+      }catch(e){
+          // mbQuery 不可用（内核没提供、或注入过早）：当成打不开，把元素原样交还给内核和站点。
+        if(done)done(el,{ok:false});
+      }
+    }
+      // 页面侧不绑定具体媒体元素的独立通知通道（media_suite 自检用它把结果经 title op 回写宿主
+      // 窗口标题，测试脚本再用 GetWindowText 读回）。send() 必须挂在一个元素上取 id/rect/src，
+      // 这类通知没有元素；这里按与 send() 完全一致的字段顺序拼请求，保证 native splitFields 各
+      // 字段索引不错位（value 仍在第 5 列），rect/barRect 全填 0。历史上页面就在调 __nmbMedia，
+      // 桥侧一直缺这个全局名，调用被 try/catch 静默吞掉、标题永远停在初始页名。
+    window.__nmbMedia=function(op,id,kind,source,value,rx,ry,rw,rh){
+      var ua='',ref='',cookie='',org='';
+      try{ua=String(navigator.userAgent||'')}catch(e){}
+      try{if(/^https?:/i.test(location.protocol))ref=String(location.href||'').split('#')[0]}catch(e){}
+      try{cookie=String(document.cookie||'')}catch(e){}
+      try{org=String(location.origin||'')}catch(e){}
+      var req=[String(op),String(id==null?'':id),String(kind==null?'':kind),
+        String(source==null?'':source),String(value==null?'':value),
+        ua,ref,cookie,org,
+        String(rx||0),String(ry||0),String(rw||0),String(rh||0),'0','0','0','0'].join('\t');
+      try{window.mbQuery(++querySeq,req,function(){})}catch(e){}
+    };
+      // 内核自带控件读取的是内核内部的媒体状态，无法反映原生解码进度，
+      // 所以对声明了 controls 的元素隐藏原生控件，改为绘制一套由本桥驱动的控件条。
+      // 控件条的外观**不在这个文件里**：真源是 hook/css/*.css（按文件名顺序拼成一份样式表），
+      // 构建时由 _nmb_gen_hooks_inc.py 把拼接结果替换到下面那行 NMB_CSS。
+      // 那行是生成器的占位行，会被整行重写，手改无效 —— 要改样式请改 hook/css 目录，
+      // 然后 `python _nmb_gen_hooks_inc.py` 重新生成 inc 再编译（详见 hook/css/README.md）。
+    var NMB_CSS='@@NMB_CSS@@';
+      // 进度条要同时画"已播"和"已缓冲"两段，而 range 的轨道颜色只能靠伪元素给：
+      // 一次性注入样式表，之后只改元素上的 --nmb-track（伪元素能继承自定义属性）。
+    function ensureBarStyle(doc){
+      if(doc.__nmbBarStyle)return;
+      doc.__nmbBarStyle=true;
+      try{
+        var style=doc.createElement('style');
+        style.textContent=NMB_CSS;
+        (doc.head||doc.documentElement).appendChild(style);
+      }catch(e){}
+    }
+    function fmtTime(value){
+      var t=Math.floor(value||0);
+      if(!(t>=0))return '--:--';
+      var m=Math.floor(t/60),s=t%60;
+      return m+':'+(s<10?'0':'')+s;
+    }
+      // 元素真正看得见的那块矩形：元素盒子 ∩ 所有会裁剪它的祖先 ∩ 视口。
+      // 为什么必须自己算：控件条挂在 documentElement 下，**根本不在元素的父容器里**，
+      // 于是父容器的 overflow:hidden/auto 裁不到它。卡片里的视频只要有一部分露在卡片外，
+      // 条就会整条画到卡片外面去——用户报的"超出界面控件显示"就是它。
+      // 会裁剪的祖先只在第一次算（要 getComputedStyle，每帧做太贵），之后每帧只取它们的矩形。
+    function clipBox(el,r){
+      var box={l:r.left,t:r.top,r:r.right,b:r.bottom};
+      var list=el.__nmbClippers;
+      if(!list){
+        list=[];
+        for(var n=el.parentElement;n&&n.nodeType===1;n=n.parentElement){
+          var st;try{st=getComputedStyle(n)}catch(e){continue}
+          if(st.overflow!=='visible'||st.overflowX!=='visible'||st.overflowY!=='visible')list.push(n);
+        }
+        el.__nmbClippers=list;
+      }
+      for(var i=0;i<list.length;i++){
+        var c=list[i].getBoundingClientRect();
+        if(box.l<c.left)box.l=c.left;
+        if(box.t<c.top)box.t=c.top;
+        if(box.r>c.right)box.r=c.right;
+        if(box.b>c.bottom)box.b=c.bottom;
+      }
+        // 视口也是一道裁剪：滚出窗口的部分本来就看不见，条不必画到窗口外面去。
+      if(box.l<0)box.l=0;
+      if(box.t<0)box.t=0;
+      if(box.r>window.innerWidth)box.r=window.innerWidth;
+      if(box.b>window.innerHeight)box.b=window.innerHeight;
+      if(box.r-box.l<=0||box.b-box.t<=0)return null;
+      return box;
+    }
+    function placeBar(el){
+      var bar=el.__nmbBar;
+      if(!bar)return;
+      var r=el.getBoundingClientRect();
+        // 控件条自身的内容高度。音频那条会被撑到元素盒子的高度（见下面的 fill），实测高度就不可靠了，
+        // 所以只量第一次（buildBar 末尾调用时条已经进 DOM、是可见的）。
+      if(!bar.__nmbNatH)bar.__nmbNatH=bar.offsetHeight||38;
+      var nat=bar.__nmbNatH;
+        // 原生控件被隐藏后 <audio> 自身高度会塌成 0，这里给它撑回控件条的高度，
+        // 否则元素会变成不可见，控件条也跟着消失。
+        // 必须先撑高再判可见性：高度为 0 时"可见高度"也是 0，否则 <audio> 的控件条直接就被藏掉了。
+      if(r.height<nat&&!el.__nmbBarSized){el.__nmbBarSized=true;el.style.minHeight=nat+'px';r=el.getBoundingClientRect()}
+        // 音频没有画面，控件条就是这个组件本身。原生 <audio controls> 的占位是 54px，而控件条内容是 38px，
+        // 按视频那套"压在画面底部"贴着盒子底边画，盒子上方就空出一条 16px 的死区——看起来就是
+        // "一条控件条浮在一个空盒子里、样式不对"。所以盒子完整露在视口里时让条撑满盒子，尺寸与页面布局都不动。
+      var fill=el.tagName==='AUDIO'&&r.height>nat+1&&r.top>=0&&r.bottom<=window.innerHeight;
+        // 全屏中的元素是另一个（或另一个容器）：本元素的条必须藏掉，否则会漂在全屏画面上。
+        // 放在每帧的显隐决策里，顺带覆盖"全屏后才建好的条"这种时序。
+      var fsEl=document.fullscreenElement;
+      var fsHidden=!!fsEl&&fsEl!==el&&!(fsEl.contains&&fsEl.contains(el));
+        // 只有"元素整体离开了视口"（或盒子本身没尺寸）才藏起来。
+        // 过去按"视口里露出来的那一段"定位（贴可见部分的底边），条就会随滚动在元素内部滑来滑去，
+        // 元素下半截滚出窗口时还会变成一条粘在窗口底边的幽灵进度条——用户报的就是这个"到处动"。
+        // 现在条跟元素盒子绑定，剩下多少、露不露得出来都交给浏览器自己裁。
+      if(fsHidden||r.width<=0||r.bottom<=0||r.top>=window.innerHeight||r.right<=0||r.left>=window.innerWidth){
+        bar.style.display='none';
+        el.__nmbBarRect=null;
+        return;
+      }
+        // 真正能画的区域＝元素盒子 ∩ 所有会裁剪它的祖先 ∩ 视口。见 clipBox 的注释。
+      var box=clipBox(el,r);
+      if(!box){bar.style.display='none';el.__nmbBarRect=null;return}
+        // 元素只要有**任何一部分**被视口或容器裁掉，整条就不画。
+        // 原因：条锁在元素底边，元素从上方滚出去时底边还在视口里，条就会孤零零地悬在页面上
+        // （画面只剩最下面一条）——用户报的"要整个视频窗口彻底消失，条才消失"就是它。
+        // 组件不完整就不显示控件，要么整整齐齐贴在里面，要么干脆不出现。
+        // 1px 容差是为了躲开亚像素导致的来回闪烁。
+        // 被裁掉多少：裁剪框比元素盒子"往里收了多少"（四边各算一次取最大）。
+        // 方向别写反：box.l 比 r.left 大才是左边被裁掉的量，反过来算永远是负数、等于永远检测不到。
+      var clip=Math.max(box.l-r.left,box.t-r.top,r.right-box.r,r.bottom-box.b,0);
+      var shown=!!el.__nmbBarRect;
+        // 迟滞：已经显示着的时候容忍 8px 的轻微裁切。不放这点余量的话，滚动中 r 每帧都在微动，
+        // 条会在"刚被裁/没被裁"这个临界点上反复显隐——看着就是一闪一闪（用户报的 bug）。
+        // 已经藏起来的则必须等元素基本完整可见才恢复，免得刚藏又露。
+      if(clip>(shown?8:0.5)){
+        bar.style.display='none';
+        el.__nmbBarRect=null;
+        return;
+      }
+        // 到这里元素一定是**完整可见**的（没被视口/容器裁掉任何一点），所以定位直接用元素自己的边：
+        // 绝不能再拿 box（它跟视口取过交集）去挪条——那样元素底边一超出窗口，box.b 就被压成视口底边，
+        // 条又会重新钉死在窗口最下面、跟着滚动一直赖在那儿（用户报的"始终置于最底下"）。
+      var availH=r.height;
+        // 16px 以下连一个播放键都塞不下，画出来只会是一坨挤坏的残条，不如不画。
+      if(availH<16){bar.style.display='none';el.__nmbBarRect=null;return}
+      var barHeight=fill?Math.round(r.height):nat;
+      if(barHeight>availH)barHeight=Math.round(availH);
+      var wantH=(fill||barHeight!==nat)?barHeight+'px':'';
+      if(bar.__nmbH!==wantH){bar.__nmbH=wantH;bar.style.height=wantH}
+        // 锁死在元素盒子里：左边对齐、压在元素自己的底边内侧、宽度不超过元素。
+        // 条相对元素的偏移因此是常量，native 挖洞也是按这个常量跟着当前 rect 走
+        // （见 render/nmb_composite.cpp 的 barOffset），滚动时画面与条不会再各画一套。
+      var top=r.bottom-barHeight;
+      var left=Math.round(r.left);
+        // 不再设"比元素还宽"的下限（原来最少 128px，窄音频元素的条会伸到元素右边压住页面内容），
+        // 只保证右边不越出窗口。
+      var width=Math.max(0,Math.min(Math.round(r.width),window.innerWidth-left));
+      if(width<=0){bar.style.display='none';el.__nmbBarRect=null;return}
+      bar.style.display='flex';
+        // 条比控件排得下的宽度还窄时，按宽度分档收掉非必要控件（只保留播放 + 进度 + 时间）。
+        // 分档结果缓存在条上：syncAll 每帧都跑到这里，不能每帧写属性。
+      var tier=width<240?'tiny':(width<300?'narrow':'');
+      if(bar.__nmbTier!==tier){
+        bar.__nmbTier=tier;
+        if(tier){bar.setAttribute('data-nmb-'+tier,'1')}
+        else{bar.removeAttribute('data-nmb-narrow');bar.removeAttribute('data-nmb-tiny')}
+      }
+        // 定位用**文档坐标 + absolute**：条因此成为页面滚动内容的一部分，滚动时由浏览器自己带着走，
+        // 不再靠 JS 每帧去追（追必然慢半拍，这就是"组件延迟移动"的另一半）。
+        // 唯一例外是元素所在的祖先链里有 position:fixed——那种元素相对视口不动，文档坐标会随外层
+        // 滚动漂走，只能退回 fixed + 视口坐标（老路径）。判断每帧做太贵，建条时算一次缓存在条上。
+      var doc0=el.ownerDocument;
+      var win0=doc0&&doc0.defaultView;
+      var sx=win0?(win0.pageXOffset||0):0, sy=win0?(win0.pageYOffset||0):0;
+      var abs=!bar.__nmbFixed;
+      var cssPos=abs?'absolute':'fixed';
+      if(bar.__nmbCssPos!==cssPos){bar.__nmbCssPos=cssPos;bar.style.position=cssPos}
+      bar.style.left=(abs?left+sx:left)+'px';
+      bar.style.top=(abs?Math.round(top)+sy:Math.round(top))+'px';
+      bar.style.width=width+'px';
+        // 上报给 native 的始终是**视口坐标**：它和 rect 同源，挖洞按"rect + 相对偏移"算，见 barOffset。
+      el.__nmbBarRect=[left,Math.round(top),width,barHeight];
+    }
+    function buildBar(el){
+      if(el.__nmbBar)return el.__nmbBar;
+      var doc=el.ownerDocument;
+        // 挂在 documentElement 下而不是 body 下：absolute 要以文档原点为基准（body 一旦
+        // position:relative/transform，挂它底下坐标就偏了），而且这样条不受 body 的层叠上下文影响。
+      var host=doc.documentElement||doc.body;
+      if(!host)return null;
+      var bar=doc.createElement('div');
+      bar.setAttribute('data-nmb-controls','1');
+        // 祖先链里有 fixed 的元素：滚动时它相对视口不动，条用文档坐标反而会漂，退回 fixed。
+        // 只算一次（遍历 + getComputedStyle 每帧做太贵）。
+      var fx=false;
+      try{
+        for(var n=el;n&&n.nodeType===1;n=n.parentElement){
+          if(getComputedStyle(n).position==='fixed'){fx=true;break}
+        }
+      }catch(e){}
+      bar.__nmbFixed=fx;
+        // 反向指回所属媒体：fullscreen polyfill 隐藏全屏元素之外的控件条时靠它认亲
+        // （全屏的是容器时，保留容器内媒体的条；其他 video/audio 的条必须藏到全屏层下面）。
+      bar.__nmbOwner=el;
+        // 默认 absolute（文档坐标），随页面一起被浏览器滚；fixed 的祖先链会退回 fixed（见 __nmbFixed）。
+        // 不插到元素旁边：原生帧画在页面之上，插在旁边会被画面盖住，位置靠合成时的挖洞露出来。
+        // 视频条不要圆角：它压在画面底边上，圆角会在两侧露出画面的尖角，看着像"贴上去的一块"。
+        // 音频条相反——它本身就是那个组件，四角都圆（见下面的 data-nmb-audio 分支）。
+        // 外观全部在 hook/css/01-base.css（选择器带 [data-nmb-controls] 前缀）。这里不写样式字符串，
+        // 只打 data-* 属性（控件身份、宽度分档、音频条），样式表靠这些属性选中对应控件。
+        // overflow:hidden 那类保险也在样式表里 —— 进度条的 min-width 撑着不让收缩，条一窄，
+        // 后面的控件就整块溢到条外面压在页面背景上（音频元素普遍窄，所以这个毛病只显在音频上）。
+      ensureBarStyle(doc);
+      var audio=el.tagName==='AUDIO';
+      if(audio)bar.setAttribute('data-nmb-audio','1');
+      var btn=doc.createElement('button');btn.type='button';btn.setAttribute('aria-label','播放或暂停');btn.setAttribute('data-nmb-play','1');
+        // 记号是 btn 里唯一那个 <i>：形状由 .nmb-mark-play/.nmb-mark-pause 决定，syncBar 只切 class。
+      var mark=doc.createElement('i');mark.className='nmb-mark nmb-mark-play';btn.appendChild(mark);btn.__nmbMark=mark;
+      var cur=doc.createElement('span');
+      var seek=doc.createElement('input');seek.type='range';seek.min='0';seek.max='1000';seek.step='1';seek.value='0';seek.setAttribute('aria-label','进度');seek.className='nmb-seek';
+      var total=doc.createElement('span');
+      var vol=doc.createElement('input');vol.type='range';vol.min='0';vol.max='100';vol.step='1';vol.value='100';vol.setAttribute('aria-label','音量');
+        // 宽度分档（placeBar 的 tier 写 data-nmb-narrow/data-nmb-tiny）与各控件尺寸都靠这些标记认控件。
+      cur.setAttribute('data-nmb-cur','1');seek.setAttribute('data-nmb-seek','1');total.setAttribute('data-nmb-total','1');vol.setAttribute('data-nmb-vol','1');
+      var fs=null;
+      if(!audio){fs=doc.createElement('button');fs.type='button';fs.textContent='⛶';fs.setAttribute('aria-label','全屏');fs.setAttribute('data-nmb-fs','1')}
+      btn.onclick=function(){if(st(el).paused){el.play()}else{el.pause()}};
+        // 音频不建全屏按钮：没有画面，全屏没有意义，而它的兜底分支会把 <audio> 拉成 100vw×100vh 撑破页面。
+      if(fs)fs.onclick=function(){try{if(doc.fullscreenElement){doc.exitFullscreen()}else if(el.requestFullscreen){el.requestFullscreen()}else{el.style.position='fixed';el.style.left='0';el.style.top='0';el.style.width='100vw';el.style.height='100vh';el.style.zIndex='99999'}}catch(e){}};
+        // 拖动进度条：本地值先落地（滑块立刻跟手），最终位置交给原生解码器。
+        // 过去有两个坑，合起来就是用户报的"拖不动"：
+        //  ① __busy 靠 600ms 定时器自动解除：拖动稍慢一点就在中途被解除，syncBar 立刻拿 native 的旧
+        //     position 回写 value，滑块被硬拽回原处——看起来就是拖不动、一松手就弹回去；
+        //  ② 只有 s.duration>0 才设 currentTime：时长还没报回来（见 openAudio 的时长回落）时，
+        //     整个拖动都是空转——滑块跟着鼠标走，松手什么也不发生。
+        // 现在：拖动期间一律不回写；松手后落点先写给本地，等 native 把位置接上（或超时）再交还控制权。
+      function dragTo(v){
+        seek.__nmbLocal=v;
+        var s=st(el),d=s.duration;
+        if(d>0){var t=d*v/1000;if(t<0)t=0;if(t>d)t=d;el.currentTime=t}
+      }
+      function dragEnd(){
+        if(seek.__timer)clearTimeout(seek.__timer);
+          // 250ms 给 native 的 seek 落点回到网页侧；这段时间内同步逻辑不许碰滑块。
+        seek.__timer=setTimeout(function(){seek.__busy=false},250);
+      }
+      seek.addEventListener('mousedown',function(){seek.__busy=true});
+        // 内核的滑块不一定派发 mouse 系事件（部分版本只走 pointer）：两套都挂，谁先到算谁。
+      seek.addEventListener('pointerdown',function(){seek.__busy=true});
+      seek.addEventListener('input',function(){seek.__busy=true;dragTo(Number(seek.value))});
+      seek.addEventListener('change',function(){dragTo(Number(seek.value))});
+      seek.addEventListener('mouseup',dragEnd);
+      seek.addEventListener('pointerup',dragEnd);
+        // 鼠标在条外松开（拖出控件条再松手）时元素收不到 mouseup，靠这条兜底解除，否则滑块会永久锁死。
+      seek.addEventListener('mouseleave',function(){if(seek.__busy)dragEnd()});
+      vol.addEventListener('input',function(){el.volume=Number(vol.value)/100});
+      bar.appendChild(btn);bar.appendChild(cur);bar.appendChild(seek);bar.appendChild(total);bar.appendChild(vol);if(fs)bar.appendChild(fs);
+      host.appendChild(bar);
+      el.__nmbBar=bar;
+      el.__nmbWantsBar=true;
+      placeBar(el);
+      return bar;
+    }
+    function syncBar(el){
+      var bar=el.__nmbBar;
+      if(!bar)return;
+      placeBar(el);
+      var s=st(el);
+      var btn=bar.firstChild;
+      var cur=btn.nextSibling,seek=cur.nextSibling,total=seek.nextSibling,vol=total.nextSibling;
+      var paused=!!s.paused;
+        // 只在状态真的翻转时才改记号：syncAll 是每帧跑的，每帧写一次样式纯属白烧 CPU。
+      if(btn.__nmbPaused!==paused){
+        btn.__nmbPaused=paused;
+        btn.__nmbMark.className=paused?'nmb-mark nmb-mark-play':'nmb-mark nmb-mark-pause';
+        var label=paused?'播放':'暂停';btn.setAttribute('aria-label',label);btn.title=label;
+      }
+        // 拖动中（__busy）或 native 还在定位（__nmbSeeking）都绝不回写：回写就是用旧位置把滑块拽回去。
+      if(!seek.__busy&&!el.__nmbSeeking&&s.duration>0){
+        var v=Math.round(s.position/s.duration*1000);
+        if(v<0)v=0;if(v>1000)v=1000;
+        seek.value=String(v);
+      }
+        // 进度条上同时画出"已播"和"已缓冲"两段：蓝=已播，浅色=已经读到但还没播，深色=还没读到。
+        // 已缓冲段用原生上报的"已读到的最远时间点"（绝对秒 bufferedUntil），而不是"播放位置+相对水位"：
+        // 后者在往回拖进度条时会跟着播放位置一起往回缩——那段数据本来早就读过了，色带必须停在原地。
+        // 已播段同理：拖动期间要用滑块自身的值，否则蓝带停在旧位置，看着仍然是拖不动。
+      var shown=(seek.__busy||el.__nmbSeeking)?Number(seek.value)/10:s.position;
+      var pct=s.duration>0?Math.max(0,Math.min(100,shown/s.duration*100)):0;
+      var until=typeof s.bufferedUntil==='number'?s.bufferedUntil:0;
+      var buf=s.duration>0?Math.max(pct,Math.min(100,until/s.duration*100)):pct;
+        // 取两位小数：不round的话每帧浮点尾数都不同，样式字符串一直在变，下面那句"没变就不写"就形同虚设。
+      pct=Math.round(pct*100)/100;buf=Math.round(buf*100)/100;
+      var track='linear-gradient(90deg,#1a73e8 0 '+pct+'%,rgba(255,255,255,.5) '+pct+'% '+buf+'%,rgba(255,255,255,.16) '+buf+'% 100%)';
+        // 值没变就不写样式，避免每帧都触发一次重算。
+      if(seek.__nmbTrack!==track){seek.__nmbTrack=track;seek.style.setProperty('--nmb-track',track)}
+      var tip=until>0?('已缓冲到 '+fmtTime(s.duration>0?Math.min(until,s.duration):until)):'进度';
+      if(seek.__nmbTip!==tip){seek.__nmbTip=tip;seek.title=tip}
+        // 已播时间也跟手：拖动时显示落点时间，和滑块、蓝带三者一致。
+      cur.textContent=fmtTime(shown);
+      total.textContent=s.duration>0?fmtTime(s.duration):'--:--';
+      vol.value=String(Math.round((el.muted?0:(el.volume==null?1:el.volume))*100));
+    }
+      // 元素被从页面里移除后，挂在 body 上的控件条和原生视频画面都得一起清掉，否则会残留在页面上。
+    var hookedEls=[];
+    function attached(el){try{return el.isConnected===undefined?document.documentElement.contains(el):el.isConnected}catch(e){return true}}
+      // 站点用 MSE（blob:）或 data: 自己喂数据的元素我们解不了，也绝不能碰：
+      // 一旦改写它的属性，站点自己的播放链路读到的就是假状态。
+    function sourceOf(el){return el.currentSrc||el.src||el.getAttribute('src')||''}
+    function sealed(el){return /^(blob:|mediasource:|data:)/i.test(sourceOf(el))}
+    function servable(el){var s=sourceOf(el);return !!s&&!/^(blob:|mediasource:|data:)/i.test(s)}
+    function dropDetached(){
+      for(var k=hookedEls.length-1;k>=0;k--){
+        var el=hookedEls[k];
+        if(attached(el))continue;
+        unhook(el);
+      }
+    }
+      // <audio controls> 一关掉原生控件就没有内在尺寸了，而 <audio> 默认是行内元素：
+      // height/min-height 对行内盒子不生效，元素会当场塌成 0×0。控件条挂在元素上，
+      // 高度为 0 就被当成"露不出来"整条隐藏，页面上只剩一块空白——用户报的"音频组件一片空白"就是它。
+      // 视频有画面撑着不会塌，所以只需要给音频补：把隐藏原生控件之前的占位尺寸钉成内联样式（外观不变），
+      // 行内盒子顺便转成能设尺寸的行内块。站点自己设了 display:none 的元素不碰——钉住尺寸会把它从隐藏变可见。
+    function pinBox(el){
+      var r=el.getBoundingClientRect();
+      var d='';try{d=getComputedStyle(el).display}catch(e){}
+      if(d==='none')return false;
+      el.__nmbPinned={display:el.style.display,width:el.style.width,minHeight:el.style.minHeight};
+      if(d==='inline'||d==='inline-block'){
+        if(r.width>0)el.style.width=Math.round(r.width)+'px';
+        el.style.display='inline-block';
+      }
+      if(r.height>0)el.style.minHeight=Math.round(r.height)+'px';
+      return r.width>0;
+    }
+      // 原生确认能打开这个地址：从这里开始才改写元素属性、隐藏原生控件并接管事件。
+    function adopt(el){
+      if(el.__nmbHooked)return;
+      el.__nmbHooked=true;hookedEls.push(el);el.setAttribute('data-native-media','1');
+      el.__nmbHadControls=!!(el.hasAttribute&&el.hasAttribute('controls'));
+      var boxed=el.tagName==='AUDIO'?pinBox(el):false;
+      if(el.__nmbHadControls){
+          // mb108 的 UA 样式 `audio:not([controls]){display:none!important}` 连行内 !important 都赢不了
+          // （实测 F:\ffbuild\p_truth2.log：setProperty('display','inline-block','important') 后 computed 仍 none）。
+          // audio 一摘 controls 属性就被内核强制隐藏、盒子塌成 0x0，控件条跟着消失——"音频组件样式完全没显示"
+          // 的根因。所以 audio 保留 controls 属性：原生小部件留在盒子底下，由本模块的不透明控件条盖住
+          // （placeBar 的 fill 模式本来就是按"撑满 54px 原生盒"设计的）。video 没有这条隐藏规则，照旧摘掉。
+        if(el.tagName!=='AUDIO'){try{el.controls=false}catch(e){}}
+          // audio 摘不了 controls，就把它连同里面那套原生小部件一起藏掉：
+          // 盒子尺寸已由 pinBox 钉住、display 也转成了 inline-block，改 opacity 只影响可见性、
+          // 不动布局也不动命中判定（elementsFromPoint 照样认它），所以这条比 visibility 稳。
+          // audio 元素除影子控件外本身没有画面，藏掉它没有任何信息损失——它长什么样由控件条决定。
+          // video 暂不整体隐藏：它的黑底在未接管/暂无画面时还顶着位置，"video 默认样式"先靠
+          // 样式表里那条 ::-webkit-media-controls 去（对 video 一样生效，且没有副作用）。
+        if(el.tagName==='AUDIO'){
+          el.__nmbHidden=el.style.opacity;
+          el.style.setProperty('opacity','0','important');
+        }
+        el.__nmbWantsBar=true}
+      installOverrides(el);
+      el.addEventListener('play',function(){st(el).paused=false;send(el,'play')},true);
+      el.addEventListener('pause',function(){st(el).paused=true;send(el,'pause')},true);
+      el.addEventListener('volumechange',function(){send(el,'volume',el.muted?0:el.volume)},true);
+      el.addEventListener('loadedmetadata',function(){if(el.__nmbHooked)send(el,'open');else hook(el)},true);
+      el.addEventListener('canplay',function(){if(el.__nmbHooked)send(el,'open');else hook(el)},true);
+        // 音频没有画面：只要站点给了可见的盒子（pinBox 认过宽度），即便它本来不带原生控件，
+        // 那块盒子在页面上也只是个空洞，照样给它一条控件条。
+      if(el.__nmbWantsBar||boxed)buildBar(el);
+        // 兑现接管之前页面就表达过的播放意图（采样见 hook 与 sniff）：走接管后的 el.play()，
+        // 它会 fire play → 上面那个捕获监听发 play op。少了这一步，页面在接管前调过的 play() 永远
+        // 到不了原生解码器：条目建好了、矩形也对，只是 native 侧 paused 恒 true —— 视频区只剩页面
+        // 底色、也听不到声音，而页面侧 paused 已是 false、play() 早已 resolve，站点以为一直在播。
+      if(el.__nmbWantPlay){el.__nmbWantPlay=false;try{el.play()}catch(e){}}
+    }
+      // 接管一个元素：先问原生解码器能不能打开，能打开才改写它的属性、隐藏原生控件并接管事件；
+      // 打不开的元素一个属性都不改，原样交还给内核和站点。
+      // 应答是异步回来的，所以这里必须用 __nmbOpening 挡住同一元素上并发飞出去的多次 open。
+    function hook(el){
+      if(el.__nmbHooked||el.__nmbSkip||el.__nmbSealed)return;
+      if(sealed(el)){el.__nmbSealed=true;return}
+      if(!servable(el))return;
+      var now=Date.now();
+      if(el.__nmbRetryAt&&now<el.__nmbRetryAt)return;
+      if(el.__nmbOpening)return;
+      el.__nmbOpening=true;
+        // open 的应答偶尔会丢（native 忙、内核吞回调）：__nmbOpening 不复位的话元素永远停在
+        // "接管中"，控件条永远建不出来。超时兜底把标记放开，下一轮 tick 重新 open；
+        // 正常应答会先一步把计时器撤掉（见回调第一行）。
+      if(el.__nmbOpenGuard)clearTimeout(el.__nmbOpenGuard);
+      el.__nmbOpenGuard=setTimeout(function(){el.__nmbOpenGuard=null;el.__nmbOpening=false},6000);
+        // 接管前采样页面意图：此刻元素还是内核原生实现，读到的 el.paused/el.autoplay 是页面真正
+        // 表达过的状态；adopt 之后 paused 变成桥的替身，就再也问不出来源意图了。
+        // 只采一次（元素上后续还会反复进这里）。事件证据（见 sniff）比这次采样更晚、更准，别覆盖它。
+      if(el.__nmbWantPlay===undefined)
+      el.__nmbWantPlay=(el.paused===false)||(el.autoplay===true)||!!(el.hasAttribute&&el.hasAttribute('autoplay'));
+        // 与 error 看门狗的判据保持一致：采样认定"本来就要播"的元素（autoplay/已在播）锁存意图，
+        // 不能被 1.5 秒的探测元素看门狗误放手。
+      if(el.__nmbWantPlay)el.__nmbEverWanted=true;
+      send(el,'open',null,function(el,data){
+        if(el.__nmbOpenGuard){clearTimeout(el.__nmbOpenGuard);el.__nmbOpenGuard=null}
+        el.__nmbOpening=false;
+        if(el.__nmbHooked||el.__nmbSkip||el.__nmbSealed)return;
+        if(data&&data.ok){adopt(el);return}
+          // 原生暂时腾不出解码资源，或 open 已被 native 异步化（先回 busy、后台慢慢开）：
+          // 前三次用短退避把快源的接管延迟压在几百毫秒内，之后照旧拉长到 8 秒封顶，
+          // 免得对着打不开的地址高频轮询。
+        if(data&&data.busy){el.__nmbTries=(el.__nmbTries||0)+1;
+          el.__nmbRetryAt=Date.now()+(el.__nmbTries<=3?200*el.__nmbTries:Math.min(1000*(el.__nmbTries-3),8000));return}
+          // 真正打不开的地址就永久放手，交给内核自己处理，避免每帧重试。
+        el.__nmbSkip=true;
+          // 接管前内核派发的原生 error 已在 document capture 被吞掉（否则站点会先一步进入错误页）；
+          // 现在确认桥同样打不开，补一个合成 error 让站点走它自己的失败 UI，而不是无限转圈。
+          // skip 已置位，capture 拦截器会放行这条合成事件。
+        fire(el,['error']);
+      });
+    }
+      // 把元素还给内核和站点（元素被移出 DOM，或站点把 src 换成了 MSE 的 blob: 地址）。
+    function unhook(el){
+      if(el.__nmbBar&&el.__nmbBar.parentNode)el.__nmbBar.parentNode.removeChild(el.__nmbBar);
+      el.__nmbBar=null;el.__nmbWantsBar=false;el.__nmbBarRect=null;el.__nmbClippers=null;
+        // 钉住的占位尺寸要还回去：元素交还给内核后，它按自己的样式重新显示。
+      if(el.__nmbPinned){el.style.display=el.__nmbPinned.display;el.style.width=el.__nmbPinned.width;el.style.minHeight=el.__nmbPinned.minHeight;el.__nmbPinned=null}
+        // 藏过的元素要还原：交还给内核之后，它按自己的样式重新显示（含原生控件）。
+      if(el.__nmbHidden!==undefined){el.style.opacity=el.__nmbHidden;el.__nmbHidden=undefined}
+      el.__nmbHooked=false;el.__nmbSealed=true;el.__nmbSkip=false;el.__nmbTries=0;el.__nmbRetryAt=0;
+      if(el.__nmbErrGuard){clearTimeout(el.__nmbErrGuard);el.__nmbErrGuard=null}
+      el.__nmbHolesKey='';el.__nmbHoleAt=0;
+      removeOverrides(el);
+      if(el.__nmbHadControls){try{el.controls=true}catch(e){}}
+      try{el.removeAttribute('data-native-media')}catch(e){}
+      var k=hookedEls.indexOf(el);if(k>=0)hookedEls.splice(k,1);
+      send(el,'close');
+    }
+      // native 已经丢掉这个元素（应答 missing，见 send）：退回"未接管"但**不交还给站点**——
+      // 下一帧 tick 会重新 open，成功就再 adopt。和 unhook 的区别是这里保留控件条、不置 sealed：
+      // 换文档导致的清表是可自愈的，站点换成 blob: 那种才是真该放手。
+    function forget(el){
+      if(!el.__nmbHooked)return;
+      var k=hookedEls.indexOf(el);if(k>=0)hookedEls.splice(k,1);
+      el.__nmbHooked=false;el.__nmbSealed=false;el.__nmbSkip=false;
+      el.__nmbOpening=false;el.__nmbRetryAt=0;el.__nmbTries=0;
+      if(el.__nmbErrGuard){clearTimeout(el.__nmbErrGuard);el.__nmbErrGuard=null}
+      el.__nmbHolesKey='';el.__nmbHoleAt=0;
+        // 播放意图也要重采：条目被丢掉时页面通常不会**再**调一次 play（它以为一直在播），
+        // 留着上一轮消费掉的标记会让重开后的条目永远停在 paused —— 表现就从"闪一下"变成"永久黑"。
+        // 置回 undefined，下次 hook 会重新从元素当前状态采样（st.paused 没被这里复位）。
+      el.__nmbWantPlay=undefined;
+      try{el.removeAttribute('data-native-media')}catch(e){}
+        // 旧会话的时长/位置不能再留着：控件条会拿它画进度，看起来像"还能播"。
+      var s0=st(el);s0.duration=0;s0.position=0;s0.bufferedUntil=0;s0.ready=false;s0.ended=false;s0.endedFired=false;
+        // 边沿标记一起复位：重新接管后 loadedmetadata/canplay 那一串要能再发一遍，否则站点等不到。
+      s0.rs=0;s0.errFired=false;s0.progAt=undefined;
+        // 反复丢（例如内核每次都在接管后清表）就彻底放手：无限重开解码线程比停住更糟。
+      el.__nmbLost=(el.__nmbLost||0)+1;
+      if(el.__nmbLost>3)el.__nmbSkip=true;
+    }
+    function scan(root){if(root.nodeType===1&&/^(AUDIO|VIDEO)$/.test(root.tagName))hook(root);var q=root.querySelectorAll?root.querySelectorAll('audio,video'):[];for(var i=0;i<q.length;i++)hook(q[i]);}
+      // 站点的能力探测（例如腾讯视频判断"当前设备能不能播"）读的就是媒体元素上的
+      // duration/error/readyState/play()/load()。以前在 HTMLMediaElement.prototype 上全局改写这些属性，
+      // 等于把站点的探测结果伪造了，站点会据此得出"设备不适合播放"这种错误结论；
+      // 现在只对真正被本桥接管的元素逐个改写，其他元素保持内核原生实现。
+    var overridden=['duration','currentTime','paused','ended','readyState','networkState','error','seekable','buffered','played','volume','muted','play','pause','load','videoWidth','videoHeight'];
+    function defOn(el,name,get,set){try{Object.defineProperty(el,name,{configurable:true,get:get,set:set||function(){}})}catch(e){}}
+      // defOn 是"属性"的写法：getter 的返回值就是属性值。
+      // 方法不能照这个套 —— play/pause/load 的方法体被当成 getter 后，读出来的属性值是
+      // Promise.resolve()（play）或 undefined（pause/load），站点一调就报 "el.play is not a function"，
+      // 腾讯视频的播放器正好断在这一句（superplayer.js 里 this._video.play()）。
+      // 方法统一走这里：getter 返回一个真正的函数，调用时 this 与 arguments 照常落到方法体上。
+    function defM(el,name,fn){
+      defOn(el,name,function(){return function(){return fn.apply(this,arguments)}});
+    }
+      // 桥交给页面的 buffered/played/seekable 是普通对象，而**内核自己**给的那个 buffered 判
+      // `instanceof TimeRanges` 是**真**（实测 mb108：TimeRanges 是原生 function，本桥没补过它）。
+      // 同一句判断在没接管时为真、一被接管就变成假，等于把站点挤到它本来不会走的支路上
+      // （有的播放器就是靠这个判断决定"能不能用 buffered 算缓冲进度"）。这里把替身的原型挂到接口上，
+      // 让两边自洽。MediaError 不在内核里、由 kMediaApiShim 补，注入在同一帧内更早的位置完成，
+      // 所以取原型要延到调用时（这里不缓存 window[name]）；名字不在就退回普通对象，不抛。
+    function asIf(o,name){try{var F=window[name];if(F&&F.prototype)Object.setPrototypeOf(o,F.prototype)}catch(e){}return o}
+    function fakeRanges(el){return asIf({length:1,start:function(){return 0},end:function(){return st(el).duration}},'TimeRanges')}
+      // 站点普遍靠事件推进自己的播放流程：有的播放器等 canplay/loadeddata 才放行"点击播放"，
+      // 有的用 loadedmetadata 初始化控件，有的靠 progress 画缓冲条。桥以前只发
+      // durationchange/timeupdate/ended，这些站点一直等不到，就永远停在"正在加载"——
+      // 画面其实在走、进度也在走，只有站点自己的 UI 不动，很难看出是事件没发。
+      // 这里按虚拟 readyState 的跨越补发（0→4 一次补齐四个，顺序同规范），是边沿触发、不会刷屏。
+      // waiting/stalled 不假发：解码器不把"饥饿"状态回给页面，编一个只会让站点误判卡顿。
+    function advance(el,s,data){
+      if(s.error&&!s.errFired){s.errFired=true;fire(el,['error'])}
+      if(!s.ready)return;
+      if(s.rs!==4){s.rs=4;fire(el,['loadedmetadata','loadeddata','canplay','canplaythrough'])}
+      if(typeof s.bufferedUntil==='number'&&s.bufferedUntil!==s.progAt){s.progAt=s.bufferedUntil;fire(el,['progress'])}
+    }
+      // 用真实的时长/进度覆盖元素自身的属性，否则内核无法解复用时会话条无法拖动。
+    function installOverrides(el){
+      if(el.__nmbPatched)return;el.__nmbPatched=true;
+      defOn(el,'duration',function(){return st(this).duration});
+      defOn(el,'currentTime',function(){return st(this).position},function(v){
+        var el=this;if(!el.__nmbHooked)return;var t=Number(v)||0;if(!isFinite(t)||t<0)t=0;
+        el.__nmbSeeking=true;st(el).position=t;
+        fire(el,['seeking']);send(el,'seek',t);
+        setTimeout(function(){if(!el.__nmbHooked)return;el.__nmbSeeking=false;fire(el,['seeked']);send(el,'state')},350);
+      });
+      defOn(el,'paused',function(){return st(this).paused});
+      defOn(el,'ended',function(){return st(this).ended});
+      defOn(el,'readyState',function(){return st(this).ready?4:0});
+      defOn(el,'networkState',function(){return 1});
+        // 错误对象也要挂到 MediaError 的原型上：站点常写 if(err instanceof MediaError) 才去读 code，
+        // 判假就整段错误处理都不走（内核原本没有 MediaError，这个原型由 kMediaApiShim 补出来）。
+      defOn(el,'error',function(){return st(this).error?asIf({code:3,message:'native decode failed'},'MediaError'):null});
+      defOn(el,'seekable',function(){return fakeRanges(this)});
+      defOn(el,'buffered',function(){return fakeRanges(this)});
+      defOn(el,'played',function(){return fakeRanges(this)});
+        // 内核给不了解码尺寸，这两个值恒 0；站点播放器拿它们做画面适配/弹幕排版/全屏判定，
+        // 0x0 会走错分支。真实尺寸由 native 应答的 vw/vh 带回（open 成功前为 0，符合"尚不可知"）。
+      defOn(el,'videoWidth',function(){var d=st(this).raw;return d&&d.vw?d.vw:0});
+      defOn(el,'videoHeight',function(){var d=st(this).raw;return d&&d.vh?d.vh:0});
+        // volume/muted 的 setter 过去只把值转给原生，自己一声不响：站点的音量按钮点下去，
+        // 它自己的图标（往往靠 volumechange 才重画）就永远不同步。这里补上事件。
+      defOn(el,'volume',function(){return this.__nmbVolume==null?1:this.__nmbVolume},function(v){this.__nmbVolume=Number(v);send(this,'volume',this.__nmbVolume);fire(this,['volumechange'])});
+      defOn(el,'muted',function(){return !!this.__nmbMuted},function(v){this.__nmbMuted=!!v;send(this,'volume',this.__nmbMuted?0:(this.__nmbVolume==null?1:this.__nmbVolume));fire(this,['volumechange'])});
+      defM(el,'play',function(){
+        var el=this;hook(el);
+        if(!el.__nmbHooked)return HTMLMediaElement.prototype.play.apply(el,arguments);
+        st(el).paused=false;st(el).ended=false;st(el).endedFired=false;fire(el,['play','playing']);
+        return Promise.resolve();
+      });
+      defM(el,'pause',function(){
+        var el=this;if(!el.__nmbHooked)return HTMLMediaElement.prototype.pause.apply(el,arguments);
+        st(el).paused=true;fire(el,['pause']);
+      });
+      defM(el,'load',function(){
+        var el=this;
+        if(!servable(el)||sealed(el)){unhook(el);return HTMLMediaElement.prototype.load.apply(el,arguments)}
+        var s1=st(el);s1.ready=false;s1.rs=0;s1.errFired=false;s1.progAt=undefined;send(el,'open');
+      });
+    }
+    function removeOverrides(el){
+      if(!el.__nmbPatched)return;el.__nmbPatched=false;
+      for(var i=0;i<overridden.length;i++){try{delete el[overridden[i]]}catch(e){}}
+    }
+      // 用事件捕获（而不是改写原型）来发现站点新建后主动播放的媒体元素：
+      // 捕获阶段只读事件、不改任何属性，站点读到的仍是内核原生实现。
+      // 顺手记下页面的"播放意图"：接管**完成之前**发生的 play/pause（autoplay、站点在 loadstart
+      // 附近自己调 play、或"先播一下再暂停"的预热手法）落在内核原生实现上，而内核没有解码能力，
+      // 这一次意图就此丢掉；桥是异步接管的，接管完再没人调过 play。adopt 时兑现这个标记。
+    function sniff(e){
+      var el=e.target;
+      if(!el||!el.tagName||!/^(AUDIO|VIDEO)$/.test(el.tagName))return;
+      if(e.type==='play'){el.__nmbWantPlay=true;el.__nmbEverWanted=true}
+      else if(e.type==='pause')el.__nmbWantPlay=false;
+      hook(el);
+    }
+    document.addEventListener('play',sniff,true);
+    document.addEventListener('pause',sniff,true);
+    document.addEventListener('loadstart',sniff,true);
+      // 关键拦截：内核自己解不了的源（实测腾讯给的是 MPEG-TS 直链，Chromium 系内核不认 TS 容器）
+      // 会在元素上派发原生 error。这一事件在桥异步接管完成之前就到了，站点播放器（腾讯
+      // thumbplayer）收到后状态机立刻锁进错误页（70011103.1 "网络状况异常"），之后桥把流缓冲好、
+      // 画面声音都在走也救不回来。媒体 error 不冒泡，但 capture 阶段必经 document：在这里拦截至 target
+      // 监听（站点的错误处理都挂元素自己上）之前。已决定放手（skip/sealed）的元素不拦，让内核报错
+      // 原样到达；桥最终打不开时会在 skip 分支补一个合成 error，站点不会永远傻等。
+      // 但页面上还有一类"只加载、从不播放"的探测/预加载元素（实测腾讯的剧集悬停预览 video）：
+      // 无桥时它们的原生 error 会让站点把预览容器藏掉；无脑吞错反而让黑窗常驻、遮住选集列表。
+      // "有没有播放意图"在这里不可靠：正片的 play 可能晚数秒才来（实测 thumbplayer 先建双 video
+      // 竞速，play 在重试成功之后）。用 DOM 结构判据：继续保护"非隐藏、面积最大的那一路视频"
+      // （正片 530x298 vs 悬停预览 384x216，靠面积比 0.9 实测稳定可分；不看是否在当前视口内——
+      // 折叠下方需滚动才可见的第二个正文视频与正片等大，必须一并保护），其余视频元素看门狗到点放手并补回 error。
+      // audio 没有视觉、误接管无副作用，一律保护。
+    function isPrimaryMedia(el){
+      if(el.tagName==='AUDIO')return true;
+      if(el.__nmbEverWanted||el.autoplay===true||(el.hasAttribute&&el.hasAttribute('autoplay')))return true;
+      var r=el.getBoundingClientRect();
+      if(r.width<16||r.height<16)return false;
+      var cs=getComputedStyle(el);
+      if(cs.display==='none'||cs.visibility!=='visible'||cs.opacity==='0')return false;
+        // 不能用"是否在当前视口内"否决：多视频页里第二个视频常排在折叠下方（要滚动才可见），
+        // 它是正文里真实存在、滚动即可播放的视频。仅因 top>innerHeight 就放弃，会误杀内核打不开、
+        // 本应由桥 ffmpeg 接管的源（实测 media_suite 的 v2：内核 ready:0 err:4，ffmpeg 却能正常开）。
+        // 探测/预览元素改用与视口无关的特征过滤：尺寸<16、display:none、面积占比、明显小于最大视频。
+      var area=r.width*r.height;
+      if(area<window.innerWidth*window.innerHeight*0.05)return false;
+      var maxArea=0,list=document.querySelectorAll('video');
+      for(var i=0;i<list.length;i++){var o=list[i];
+        if(o===el)continue;var or2=o.getBoundingClientRect();
+        if(or2.width<16||or2.height<16)continue;var oc=getComputedStyle(o);
+        if(oc.display==='none'||oc.visibility!=='visible'||oc.opacity==='0')continue;
+        if(or2.width*or2.height>maxArea)maxArea=or2.width*or2.height;
+      }
+      return area>=maxArea*0.9;
+    }
+    document.addEventListener('error',function(e){
+      var el=e.target;
+      if(!el||!el.tagName||!/^(AUDIO|VIDEO)$/.test(el.tagName))return;
+      if(el.__nmbSkip||el.__nmbSealed)return;
+      hook(el);
+      if(!el.__nmbErrGuard){
+        el.__nmbErrGuard=setTimeout(function(){
+          el.__nmbErrGuard=null;
+          if(el.__nmbSkip||el.__nmbSealed)return;
+          if(!isPrimaryMedia(el)){
+            el.__nmbSkip=true;
+            if(el.__nmbHooked)unhook(el);
+            fire(el,['error']);
+          }
+        },1500);
+      }
+      e.stopImmediatePropagation();
+      e.preventDefault();
+    },true);
+      // 采集"绘制在视频元素之上"的页面元素矩形，交给 native 在合成视频帧时整块挖空。
+      // 背景：帧是 StretchDIBits(SRCCOPY) 直接盖在页面像素上的，站点自绘的播放器 UI（控制栏、弹幕、
+      // 弹窗、遮罩、广告、loading 动画）全在视频矩形之内、视频帧之上，不挖就会被画面压没。
+      // elementsFromPoint 由内核做命中测试，返回该点自顶向下的元素栈：栈里 video 之前的是覆盖物，
+      // video 之后的是它的祖先容器（在视频之下，绝不能挖——整片黑底容器都在那一段）。
+      // 规则网格 + 四边加密采样：控制栏通常只有 40px 高，纯网格可能一个点都落不进去。
+    var HOLE_STEP=30, HOLE_EDGE=8, HOLE_MAX=80, holeMark=0;
+    function collectHoles(el){
+      if(window.__nmbNoHoles||typeof document.elementsFromPoint!=='function')return '';
+      var r=el.getBoundingClientRect();
+      if(r.width<16||r.height<16)return '';
+      var token=++holeMark;
+      var pts=[],x,y;
+      for(x=r.left+HOLE_STEP/2;x<r.right;x+=HOLE_STEP)
+      for(y=r.top+HOLE_STEP/2;y<r.bottom;y+=HOLE_STEP)pts.push([x,y]);
+        // 上下两条长边、左右两条短边各加密一排点，细高/细宽的控制栏、进度条、弹幕都靠它们命中。
+      for(x=r.left+HOLE_STEP/2;x<r.right;x+=HOLE_STEP){pts.push([x,r.top+HOLE_EDGE]);pts.push([x,r.bottom-HOLE_EDGE])}
+      for(y=r.top+HOLE_STEP/2;y<r.bottom;y+=HOLE_STEP){pts.push([r.left+HOLE_EDGE,y]);pts.push([r.right-HOLE_EDGE,y])}
+      var found=[];
+      function take(o){
+        if(!o||o===el||o===document||o===document.documentElement||o===document.body)return;
+        if(o.__nmbHoleMark===token)return;
+        o.__nmbHoleMark=token;
+        if(found.length>=HOLE_MAX)return;
+        try{
+          var z=getComputedStyle(o);
+          if(z.display==='none'||z.visibility!=='visible'||z.opacity==='0')return;
+          var b=o.getBoundingClientRect();
+          if(b.width<=0||b.height<=0)return;
+          var x1=Math.max(r.left,b.left),y1=Math.max(r.top,b.top),
+            x2=Math.min(r.right,b.right),y2=Math.min(r.bottom,b.bottom);
+          if(x2-x1<1||y2-y1<1)return;
+            // 硬洞 h：元素自身有可见底色/底图（登录卡片、控制栏深色底、遮罩），整块让开；
+            // 软洞 s：背景透明、盒内只有文字/图标像素（弹幕、SVG 按钮），native 按像素亮度从页面备份抠回，
+            // 不能整块挖——否则透明部分变成黑矩形（弹幕拖黑条）。
+          var kind='s';
+          try{
+            var bg=String(z.backgroundColor||''),alpha=1;
+            var mm=bg.match(/rgba?\(([^)]*)\)/);
+            if(mm){var pp=mm[1].split(',');if(pp.length>=4)alpha=parseFloat(pp[3])||0}
+            if(alpha>0.08||(z.backgroundImage&&z.backgroundImage!=='none'))kind='h';
+          }catch(e){}
+            // 起点四舍五入、尺寸向上取整：避免相邻洞之间或洞与视频边缘露出 1px 的视频残边。
+          found.push(kind+Math.round(x1)+','+Math.round(y1)+','
+            +Math.ceil(x2-Math.round(x1))+','+Math.ceil(y2-Math.round(y1)));
+        }catch(e){}
+      }
+      for(var i=0;i<pts.length;i++){
+        var stack;
+        try{stack=document.elementsFromPoint(pts[i][0],pts[i][1])}catch(e){continue}
+        if(!stack||stack.indexOf(el)<0)continue;
+        for(var j=0;j<stack.length;j++){
+          if(stack[j]===el)break; // 到 video 为止；再往下全是祖先容器
+          take(stack[j]);
+        }
+      }
+      return found.join(';');
+    }
+    var lastState=0;
+    var lastIdleScan=0;
+      // 元素连续隐藏多久就释放原生那一路（毫秒）。给一点宽限是因为站点换皮肤/折叠动画期间
+      // 会有一两帧尺寸归零，立刻放手会把正常播放的媒体也干掉。
+    var kHiddenReleaseMs=1500;
+      // 覆盖物会在没有布局变化时自己变动（控制栏靠鼠标移动淡入淡出、弹窗动画、弹幕滚动），
+      // rect 上报捕获不到这些，所以单独节流轮询；滚动/缩放/鼠标移动时立即标脏、下一帧就采。
+    var holeDirty=true;
+    function markHoles(){if(hookedEls.length)holeDirty=true}
+    
+    function syncAll(){
+      var now=Date.now();
+        // 没有任何已接管媒体时大幅降频：rAF 每帧 + 每个 scroll 事件都全文档 querySelectorAll('audio,video')
+        // 并强制 layout，在 B站这类重页面上实测把滚动首帧延迟抬高一倍（关桥 70ms → 开桥 160ms）。
+        // 新元素由 MutationObserver 的 scan() 实时发现，处于 opening/重试退避的元素 500ms 兜底再试足够；
+        // 一旦有元素 adopt（hookedEls 非空）立即恢复逐帧，保证播放中的视频跟随滚动不慢半拍。
+      if(hookedEls.length===0){
+        if(now-lastIdleScan<500)return;
+        lastIdleScan=now;
+      }
+      dropDetached();
+        // 位置每帧都对，播放状态按固定间隔回读，避免每帧都做一次桥调用。
+      var wantState=now-lastState>=200;
+      if(wantState)lastState=now;
+      var q=document.querySelectorAll('audio,video');
+      for(var i=0;i<q.length;i++){
+        var el=q[i];
+        var r=el.getBoundingClientRect();
+          // 组件被隐藏（站点 display:none / 折叠面板 / 切走的 tab）时元素**还在 DOM 里**，
+          // 所以 dropDetached 管不到它，可画面和控件条都已经没了——不管的话原生那一路会一直解码
+          // 下去、声音继续放、缓冲继续涨，用户以为"关掉了"其实还在跑。
+          // 隐藏期间根本不接管；已经接管的，连续隐藏 kHiddenReleaseMs 之后把原生那一路释放掉
+          // （用 forget 而不是 unhook：不置 sealed，重新显示时下一帧 tick 会再 hook/open 接回来）。
+        if(r.width<=0||r.height<=0){
+          if(!el.__nmbHooked)continue;
+          if(!el.__nmbHiddenAt){el.__nmbHiddenAt=now;continue}
+          if(now-el.__nmbHiddenAt<kHiddenReleaseMs)continue;
+          send(el,'close');forget(el);el.__nmbHiddenAt=0;
+          continue;
+        }
+        el.__nmbHiddenAt=0;
+        hook(el);
+          // 没被接管的元素（MSE/blob:、或原生打不开的地址）原样交给内核和站点，
+          // 不产生任何桥调用：重页面上每帧几十次无效往返本身就是卡死的主因之一。
+        if(!el.__nmbHooked)continue;
+          // 站点换源（实测腾讯视频：先用 .f2.mp4，播几秒后换成一整条 .ts.m3u8）时，
+          // 原生会重开一路解码，新会话报到时长之前页面若还留着上一份的时长，控件条就会拿旧值画
+          // （实测位置已经走到 28s，右边仍显示 /15）。所以源一变就把这份状态清掉，等新值回来。
+        var srcNow=sourceOf(el);
+        if(el.__nmbSrc!==srcNow){el.__nmbSrc=srcNow;
+          var s0=st(el);s0.duration=0;s0.position=0;s0.bufferedUntil=0;s0.ended=false;s0.endedFired=false;
+          s0.rs=0;s0.errFired=false;s0.progAt=undefined;}
+        var key=Math.round(r.left)+','+Math.round(r.top)+','+Math.round(r.width)+','+Math.round(r.height);
+        var changed=el.__nmbRect!==key;el.__nmbRect=key;
+        if(changed)placeBar(el);
+          // 位置和播放状态的例行回读：结果异步回来时顺手把状态事件补上。
+        if(changed||wantState)send(el,changed?'rect':'state',null,null,true);
+          // 覆盖物挖空：400ms 轮询 + 事件标脏（见 collectHoles）。只有结果变化才过桥，稳态下零流量。
+        if(el.tagName==='VIDEO'&&(holeDirty||el.__nmbHoleAt===undefined||now-el.__nmbHoleAt>400)){
+          el.__nmbHoleAt=now;
+          var hk=collectHoles(el);
+          if(hk!==el.__nmbHolesKey){el.__nmbHolesKey=hk;send(el,'holes',hk);}
+        }
+        if(el.__nmbWantsBar)syncBar(el);
+      }
+      holeDirty=false;
+    }
+      // 用动画帧逐帧同步元素位置：只用定时器的话，页面滚动时原生视频画面会慢半拍，
+      // 看起来就像视频在跟着页面滚动。
+    var raf=window.requestAnimationFrame||function(fn){return setTimeout(fn,16)};
+    function tick(){syncAll();raf(tick)}
+    raf(tick);
+    window.addEventListener('scroll',syncAll,true);
+    document.addEventListener('scroll',syncAll,true);
+    window.addEventListener('resize',syncAll,true);
+      // 覆盖物在这些时机变化：翻页/内滚（弹幕容器也会内滚）、缩放、鼠标进出视频区（控制栏淡入淡出）、
+      // 点击（弹出菜单/设置面板/清晰度列表）。监听只置脏标记，采集节流仍由 syncAll 统一做。
+    window.addEventListener('scroll',markHoles,true);
+    document.addEventListener('scroll',markHoles,true);
+    window.addEventListener('resize',markHoles,true);
+    document.addEventListener('mousemove',markHoles,true);
+    document.addEventListener('pointerdown',markHoles,true);
+    scan(document);
+      // 脚本上下文刚建立时 documentElement 可能还不存在，观察目标要判空，否则这里会抛错。
+    if(document.documentElement)new MutationObserver(function(rs){for(var i=0;i<rs.length;i++)for(var j=0;j<rs[i].addedNodes.length;j++)scan(rs[i].addedNodes[j])}).observe(document.documentElement,{childList:true,subtree:true});
+      // 把当前文档标题回写到宿主窗口标题，宿主据此可以确认页面跳转是否真的发生。
+      // 只有主框架说了算：真实站点里满地都是 about:blank 的 iframe，它们也会报自己的
+      // document.title||location.href；允许它们改窗口标题的话，窗口标题会当场变成 about:blank
+      // （v.qq.com 实测如此），宿主就再也读不到当前页面了。
+    function isTopFrame(){try{return window.top===window}catch(e){return false}}
+    function reportTitle(){
+      if(!isTopFrame())return;
+      try{
+        var t=String(document.title||location.href).replace(/[\t\r\n]/g,' ');
+        window.mbQuery(++querySeq,['title','page','page','',t,'0','0','0','0','0','0','0','0'].join('\t'),function(){});
+      }catch(e){}
+    }
+    reportTitle();document.addEventListener('DOMContentLoaded',reportTitle);
+  }catch(e){window.__nmbInstalled=false}
+})();(function(){
+  if(window.__nmbHoverOn)return;window.__nmbHoverOn=true;
+  var hasPE=false;try{hasPE=typeof window.PointerEvent==='function'}catch(e){}
+  var chain=[];var X=0,Y=0;var prevTop=null;
+    // ── 档2：:hover 伪类 CSS 复制 ──
+    // 浏览器不为合成事件激活 :hover 伪类，这里把样式表里 .sel:hover 的声明复制为
+    // .sel.__nmb-h，给当前 hover 链的元素加 __nmb-h class 即可生效。
+  var HC='__nmb-h';var cursorSeq=0;
+    // 先定义核心函数：即使后续 CSS 克隆/MutationObserver 初始化抛异常，__nmbHoverMove 仍可用
+  function setHoverClass(oldChain,newChain){
+    for(var i=0;i<oldChain.length;i++){var el=oldChain[i];
+      if(newChain.indexOf(el)<0){try{el.classList.remove(HC)}catch(e){}}}
+    for(var j=0;j<newChain.length;j++){var el=newChain[j];
+      if(oldChain.indexOf(el)<0){try{el.classList.add(HC)}catch(e){}}}
+  }
+    // ── 档3：光标手型 ──
+    // 检测当前 top 元素的 computed cursor，cursor 变化时通过 mbQuery 通知 native 切系统光标。
+  function updateCursor(top){
+    var cur='default';
+    if(top){try{cur=getComputedStyle(top).cursor||'default'}catch(e){}}
+    if(cur.indexOf('pointer')>=0)cur='pointer';
+    else if(cur.indexOf('text')>=0)cur='text';
+    else cur='default';
+    if(window.__nmbCursor!==cur){
+      window.__nmbCursor=cur;
+      try{var T=String.fromCharCode(9);if(window.mbQuery)window.mbQuery(++cursorSeq,'cursor'+T+T+T+T+cur,function(){})}catch(e){}
+    }
+  }
+  function emit(el,type,isPointer,related){
+    try{
+      var e;
+      if(isPointer&&hasPE){
+        e=new PointerEvent(type,{bubbles:true,cancelable:true,composed:true,view:window,clientX:X,
+            clientY:Y,screenX:X,screenY:Y,button:0,buttons:0,relatedTarget:related||null,
+            pointerId:1,width:1,height:1,pressure:0,pointerType:'mouse',isPrimary:true});
+      }else{
+        e=new MouseEvent(type,{bubbles:true,cancelable:true,composed:true,view:window,clientX:X,
+            clientY:Y,screenX:X,screenY:Y,button:0,buttons:0,relatedTarget:related||null});
+      }
+      el.dispatchEvent(e);
+    }catch(e){}
+  }
+  window.__nmbHoverMove=function(nx,ny){
+    X=nx;Y=ny;
+    var hit=[];
+    try{
+      if(document.elementsFromPoint)hit=document.elementsFromPoint(X,Y)||[];
+      else if(document.elementFromPoint){var t=document.elementFromPoint(X,Y);if(t)hit=[t]}
+    }catch(e){hit=[]}
+    var top=hit[0]||null;
+      // 离开链：旧链中不在新链的元素；mouseleave 不冒泡，自内向外（chain 顶→底）。
+    for(var i=0;i<chain.length;i++){var o=chain[i];
+      if(hit.indexOf(o)<0)emit(o,'mouseleave',0,top)}
+      // 仅当命中目标变化才补 over/out，否则每次移动都 over 会把站点的"进入"逻辑打满。
+    if(top!==prevTop){
+      if(prevTop){emit(prevTop,'mouseout',0,top);if(hasPE)emit(prevTop,'pointerout',1,top)}
+      if(top){emit(top,'mouseover',0,prevTop);if(hasPE)emit(top,'pointerover',1,prevTop)}
+    }
+      // 进入链：新链中不在旧链的元素；mouseenter 不冒泡，自外向内（hit 底→顶）。
+    for(var j=hit.length-1;j>=0;j--){var n=hit[j];
+      if(chain.indexOf(n)<0)emit(n,'mouseenter',0,prevTop)}
+    if(top){emit(top,'mousemove',0,null);if(hasPE)emit(top,'pointermove',1,null)}
+    setHoverClass(chain,hit);
+    updateCursor(top);
+    chain=hit;prevTop=top;
+  };
+    // ── 档2：:hover 伪类 CSS 复制（放在核心函数之后，初始化失败不影响 __nmbHoverMove）──
+    // 同源 CSS 直接读 cssRules；跨域 CSS（SecurityError）用 XHR 异步获取文本后正则提取 :hover。
+  var hoverStyle=null;var hoverStyleCross=null;var crossRules='';var clonedSheets=new Set();
+  function ensureHoverStyle(){
+    if(!hoverStyle){hoverStyle=document.createElement('style');hoverStyle.setAttribute('data-nmb-hover','1')}
+    if(!hoverStyleCross){hoverStyleCross=document.createElement('style');hoverStyleCross.setAttribute('data-nmb-hover-cross','1')}
+      // onScriptContext 早期 documentElement 可能为 null：appendChild 目标为 null 时不做（等
+      // initCssClone 延迟重试）；documentElement 可用后每次检查 parentNode 把 style 移到 head。
+    var h=document.head||document.documentElement;
+    if(!h)return;
+    if(hoverStyle.parentNode!==h)h.appendChild(hoverStyle);
+    if(hoverStyleCross.parentNode!==h)h.appendChild(hoverStyleCross);
+  }
+  function parseHoverFromCssText(text){
+    var out='';var re=/(?:^|\})\s*([^{}]*:hover[^{}]*)\s*\{([^{}]*)\}/g;var m;
+    while((m=re.exec(text))){
+      var sel=m[1].trim();var decl=m[2].trim();
+      var parts=sel.split(',');var made='';
+      for(var k=0;k<parts.length;k++){
+        var s=parts[k].trim();if(s.indexOf(':hover')<0)continue;
+        made+=(made?',':'')+s.replace(/:hover\b/g,'.'+HC);
+      }
+      if(made){out+=made+'{'+decl+'}\n'}
+    }
+    return out;
+  }
+  function cloneHoverRules(){
+    try{
+      ensureHoverStyle();
+      var out='';
+      for(var si=0;si<document.styleSheets.length;si++){
+        var ss=document.styleSheets[si];if(clonedSheets.has(ss))continue;
+        var rules=null;
+        try{rules=ss.cssRules||ss.rules}catch(e){
+          clonedSheets.add(ss);
+          if(ss.href){
+            try{
+              var xhr=new XMLHttpRequest();
+              xhr.open('GET',ss.href,true);
+              xhr.onreadystatechange=function(){
+                if(xhr.readyState==4&&xhr.status>=200&&xhr.status<300&&xhr.responseText){
+                  try{var extra=parseHoverFromCssText(xhr.responseText);
+                    if(extra){crossRules+=extra;hoverStyleCross.textContent=crossRules}}catch(e2){}
+                }
+              };
+              xhr.send();
+            }catch(e2){}
+          }
+          continue;
+        }
+        clonedSheets.add(ss);
+        for(var ri=0;ri<rules.length;ri++){
+          var r=rules[ri];if(!r.selectorText||r.selectorText.indexOf(':hover')<0)continue;
+          var sels=r.selectorText.split(',');var made='';
+          for(var k=0;k<sels.length;k++){
+            var s=sels[k].trim();if(s.indexOf(':hover')<0)continue;
+            var c=s.replace(/:hover\b/g,'.'+HC);
+            made+=(made?',':'')+c;
+          }
+          if(made){out+=made+'{'+r.style.cssText+'}\n'}
+        }
+      }
+      if(out)hoverStyle.textContent=out;
+    }catch(e){}
+  }
+    // onScriptContext 时机 documentElement 可能为 null（文档还没解析出 <html>）：
+    // 此时 cloneHoverRules 和 mo.observe 都会静默失败，且 IIFE 幂等不会重入。
+    // 用 setTimeout 延迟到 documentElement 可用后再初始化，确保 CSS 克隆和 MutationObserver 都就位。
+  function initCssClone(){
+    if(!document.documentElement){setTimeout(initCssClone,50);return}
+    try{cloneHoverRules()}catch(e){}
+    try{
+      var mo=new MutationObserver(function(){try{cloneHoverRules()}catch(e){}});
+      mo.observe(document.documentElement,{childList:true,subtree:true});
+    }catch(e){}
+  }
+  initCssClone();
+})();

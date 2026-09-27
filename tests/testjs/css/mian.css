@@ -1,0 +1,17 @@
+#mian{
+    float: left;
+    width: calc(100% - 205px);
+    height: calc(100% - 121px);
+    top: 0px;
+    left: 0px;
+    background: red;
+
+}
+#main_ui{
+    width: 100%;
+    height: 100%;
+}
+body {
+	overflow:hidden;
+	overflow-y:hidden;
+}

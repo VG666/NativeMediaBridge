@@ -1,0 +1,19 @@
+LIBRARY NativeMediaBridge
+EXPORTS
+    NMB_Initialize
+    NMB_CreateBrowser
+    NMB_GetWebView
+    NMB_SetDebugConfig
+    NMB_GetWindow
+    NMB_LoadURL
+    NMB_LoadHTML
+    NMB_Resize
+    NMB_Show
+    NMB_SetMaximized
+    NMB_IsMaximized
+    NMB_ShowDevTools
+    NMB_DestroyBrowser
+    NMB_Shutdown
+    NMB_GetLastError
+    NMB_SetHostHooks
+    NMB_MediaLoadUrlBegin

@@ -1,0 +1,96 @@
+<html>
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <link rel="stylesheet" type="text/css" href="css/sidebar.css">
+        <link rel="stylesheet" type="text/css" href="css/main_view.css">
+        <link rel="stylesheet" type="text/css" href="css/mian.css">
+        <link rel="stylesheet" type="text/css" href="css/Control_bar.css">
+        <script src="js/win_header.js"></script>
+        <script src="js/sidebar.js"></script>
+        <script src="js/muisc_detailed.js"></script>
+        <link rel="stylesheet" href="css/mdui.min.css"/>
+        <script src="js/mdui.min.js"></script>
+    </style>
+    </head>
+    <body style="background:none">
+        <div id="mian_frame" style="position:absolute;top：0px;left:0px">
+            <div id="header">
+                <div id="user">
+                    <img id="Sign" src="img/no_Sign.png">
+                </div>
+                <div class="group-control">
+                    <button id="btn" class="btn-close" onclick="mouseMsg('close')" title="关闭窗口"></button>
+                    <button id="btn" class="btn-max" onclick="mouseMsg('max')" title="最大化"></button>
+                    <button id="btn" class="btn-min" onclick="mouseMsg('min')" title="最小化"></button>
+                </div>
+            </div>
+            <div id="sidebar">
+                <ul class="mdui-list mdui-list-dense">
+                    <li id="sidebar1" class="mdui-list-item mdui-text-color-white" onclick="sidebar_focus(1)">
+                        <i class="mdui-list-item-icon mdui-icon material-icons mdui-text-color-white">star_border</i>
+                        <div class="mdui-list-item-content">推荐</div>
+                    </li>
+                    <li id="sidebar2" class="mdui-list-item mdui-ripple mdui-ripple-yellow mdui-text-color-white mdui-hoverable" onclick="sidebar_focus(2)">
+                        <i class="mdui-list-item-icon mdui-icon material-icons mdui-text-color-white">video_label</i>
+                        <div class="mdui-list-item-content">电台</div>
+                    </li>
+                    <li id="sidebar3" class="mdui-list-item mdui-ripple mdui-ripple-yellow mdui-text-color-white mdui-hoverable" onclick="sidebar_focus(3)">
+                        <i class="mdui-list-item-icon mdui-icon material-icons mdui-text-color-white">shop</i>
+                        <div class="mdui-list-item-content">视频</div>
+                    </li>
+                </ul>
+            </div>
+            <div id="mian">
+                <iframe id="main_ui" src="mian_1.html" frameborder="0"></iframe>
+            </div>
+            <div id="Control_bar">
+                <div id="Control_bar_music_play">
+                    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+                    <button class="mdui-btn mdui-btn-icon mdui-color-theme-accent mdui-ripple mdui-ripple-black" style="border: 2px solid #ffc15d; border-radius: 100%;"><i class="mdui-icon material-icons">first_page</i></button>&nbsp;
+                    <button class="mdui-btn mdui-btn-icon mdui-color-theme-accent mdui-ripple mdui-ripple-black" style="background: #ffc15d;width: 40px;height: 40px;flex-grow:1;"><i class="mdui-icon material-icons">play_arrow</i></button>&nbsp;&nbsp;
+                    <button class="mdui-btn mdui-btn-icon mdui-color-theme-accent mdui-ripple mdui-ripple-black" style="border: 2px solid #ffc15d; border-radius: 100%;"><i class="mdui-icon material-icons">last_page</i></button>
+                </div>
+                <div id="music_img_frame">
+                    <i id="music_img" class="mdui-icon material-icons" style="background:#3f4141;">music_note</i>
+                    <i id="music_img_state" class="mdui-icon material-icons mdui-text-color-white"
+                    onclick="muisc_detailed_switch()">expand_less</i>
+                </div>
+                <div style="float: left;width: calc(80% - 205px);height:100%">
+                    <label class="mdui-slider" style="left:10px;margin-top: 20px;">
+                      <input id="music_range" type="range" step="0" min="0" max="100"/>
+                    </label>
+                </div>
+            </div>
+            <div id="muisc_detailed" scroll="no">
+                <div id="header" style="background:none">
+                    <div class="group-control">
+                        <button id="btn_2" class="btn-close" onclick="mouseMsg('close')" title="关闭窗口"></button>
+    		
+                        <button id="btn_2" class="btn-max" onclick="mouseMsg('max')" title="最大化"></button>
+    		
+                        <button id="btn_2" class="btn-min" onclick="mouseMsg('min')" title="最小化"></button>
+                    </div>
+                </div>
+            </div>
+            <style>
+                #muisc_detailed{
+                    position: absolute;
+                    top:0px;
+                    z-index: 1;
+                    background: #ffc15d;
+                    width: 100%;
+                    height: 0px;
+
+                }
+                .mdui-slider-fill::before {
+                    background-color: #ffc15d;
+                }
+                .mdui-slider-thumb {
+                    background-color: #ffc15d;
+                    border: 2px solid #ffc15d
+                }
+            </style>
+        </div>
+    </body>
+</html>

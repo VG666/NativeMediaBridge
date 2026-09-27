@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NativeMediaBridge 事件测试</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      padding: 20px 28px 60px;
+      color: #e8edf5;
+      background: #0b0f17;
+      font-family: Arial, "Microsoft YaHei", sans-serif;
+    }
+    main { width: min(940px, 100%); margin: 0 auto; }
+    h1 { margin: 0 0 8px; font-size: 24px; }
+    p.tip { margin: 0 0 18px; color: #8a97ad; font-size: 13px; line-height: 1.7; }
+    section {
+      margin-bottom: 18px;
+      padding: 16px;
+      border: 1px solid #283244;
+      border-radius: 12px;
+      background: #151b26;
+    }
+    h2 { margin: 0 0 10px; font-size: 16px; }
+    video { display: block; width: 100%; height: 300px; background: #000; }
+    audio { display: block; width: 100%; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+    button, a.btn {
+      padding: 8px 14px;
+      border: 1px solid #2f6df6;
+      border-radius: 8px;
+      background: #1b2740;
+      color: #cfe0ff;
+      font-size: 13px;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-block;
+    }
+    button:hover, a.btn:hover { background: #24365c; }
+    #status {
+      margin-top: 10px;
+      padding: 10px;
+      border-radius: 8px;
+      background: #0d1424;
+      color: #7de2a0;
+      font-family: Consolas, monospace;
+      font-size: 12px;
+      white-space: pre-wrap;
+      line-height: 1.6;
+    }
+    .nav { display: flex; gap: 10px; flex-wrap: wrap; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>NativeMediaBridge 事件测试</h1>
+    <p class="tip">
+      本页默认完全手动：不会自动跳转，也不会自动播放，所有动作都由你点击触发。<br>
+      手动验证：每个媒体下方是原生桥自绘的控件条（内核自带控件读不到解码进度，已被替换），
+      拖它的进度条时画面要立刻跟上（播放中与暂停时都要试）；滚动页面时控件条和画面要跟着元素走，
+      元素滚出视口后画面不应残留在窗口边缘；点链接确认页面跳转正常。<br>
+      需要脚本化自检时在本页地址后加 <code>?auto=1</code>（测试脚本的 <code>--auto</code> 参数会自动加上）。
+    </p>
+
+    <section>
+      <h2>操作</h2>
+      <div class="row">
+        <button onclick="playAll()">同时播放两个视频</button>
+        <button onclick="pauseAll()">全部暂停</button>
+        <button onclick="dragSeek()">模拟拖动进度条</button>
+        <button onclick="jumpTo(30)">跳到第 30 秒</button>
+      </div>
+      <div class="nav">
+        <a class="btn" href="https://www.bilibili.com/video/BV1hKKP6jEHV/?vd_source=a354fdcf18d5dcd55635a322d1fedef9">跳转到腾讯视频（当前窗口）</a>
+        <a class="btn" href="media_suite.html?r=1">跳转到本页（刷新式跳转）</a>
+        <a class="btn" href="https://v.qq.com/" target="_blank">腾讯视频 target=_blank 跳转</a>
+      </div>
+      <div id="status">等待媒体加载…</div>
+    </section>
+
+    <section>
+      <h2>视频 1</h2>
+      <video id="v1" class="v" controls preload="metadata" src="https://media.w3.org/2010/05/sintel/trailer.mp4">当前浏览器不支持 HTML5 video。</video>
+    </section>
+
+    <section>
+      <h2>视频 2</h2>
+      <video id="v2"class="v" controls preload="metadata" src="http://www.w3schools.com/html/mov_bbb.mp4">当前浏览器不支持 HTML5 video。</video>
+    </section>
+    
+    <section>
+      <h2>视频 3</h2>
+      <video id="v2" controls preload="metadata" src="file:///F:/%E7%BC%96%E7%A8%8B/MBPython-master/NativeMediaBridge-%E6%B3%A8%E8%A7%A3%E7%89%88/tests/testjs/_nmb_local.mp4">当前浏览器不支持 HTML5 video。</video>
+    </section>
+
+    <section>
+      <h2>音频</h2>
+      <audio id="a1" controls preload="metadata" src="http://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3">当前浏览器不支持 HTML5 audio。</audio>
+    </section>
+  </main>
+
+  <script>
+    var all = function () { return [document.getElementById('v1'), document.getElementById('v2'), document.getElementById('a1')]; };
+
+    function playAll() { all().forEach(function (el) { try { el.play(); } catch (e) {} }); }
+    function pauseAll() { all().forEach(function (el) { try { el.pause(); } catch (e) {} }); }
+    function jumpTo(t) { all().forEach(function (el) { try { el.currentTime = t; } catch (e) {} }); }
+
+    // 用连续设置 currentTime 模拟"按住进度条拖动"，两个视频同时拖动。
+    function dragSeek() {
+      var targets = [document.getElementById('v1'), document.getElementById('v2')];
+      var step = 0;
+      var timer = setInterval(function () {
+        step += 1;
+        var ratio = step / 60;
+        targets.forEach(function (el) {
+          var total = el.duration || 0;
+          if (total > 0) { try { el.currentTime = total * (1 - ratio); } catch (e) {} }
+        });
+        if (step >= 60) clearInterval(timer);
+      }, 40);
+    }
+
+    function fmt(el) {
+      var d = el.duration, c = el.currentTime;
+      return el.id + '  时长=' + (isFinite(d) ? d.toFixed(2) : '-') +
+             '  当前=' + (isFinite(c) ? c.toFixed(2) : '-') +
+             '  暂停=' + el.paused + '  就绪=' + el.readyState;
+    }
+
+    setInterval(function () {
+      document.getElementById('status').textContent = all().map(fmt).join('\n');
+    }, 300);
+
+    // 页面自检：结果通过原生桥回写成窗口标题，测试脚本可以直接读出来。
+    var selfTest = [];
+    function publishSelfTest() {
+      var text = 'NMB自检 ' + selfTest.join(' ');
+      document.title = text;
+      try { __nmbMedia('title', 'page', 'page', '', text, '0', '0', '0', '0'); } catch (e) {}
+    }
+    function note(name, ok, extra) {
+      selfTest.push(name + '=' + (ok ? 'OK' : 'FAIL') + (extra ? '(' + extra + ')' : ''));
+      publishSelfTest();
+    }
+
+    // 本页不自动跳转、也不自动播放：跳转和播放都只由用户点击触发。
+    // 只有显式加 ?auto=1 时才跑脚本化自检，供测试脚本 --auto 使用。
+    var auto = location.search.indexOf('auto') >= 0;
+    if (auto) {
+      // 事件与接口名这两项是 2026-09-14 补上的：站点普遍靠 loadedmetadata/canplay 这一串推进
+      // 自己的流程（等不到就永远停在"正在加载"），内核那边更是连 MediaError/VideoPlaybackQuality
+      // 这两个接口名都没有（实测见 tests\testjs\_probe_api.html；TimeRanges 它有，不要一并算进去）。
+      // 监听必须赶在 playAll 之前挂。
+      var evHits = {};
+      ['loadedmetadata', 'loadeddata', 'canplay', 'canplaythrough', 'progress', 'volumechange'].forEach(function (name) {
+        all().forEach(function (el) {
+          el.addEventListener(name, function () { evHits[name] = (evHits[name] || 0) + 1; });
+        });
+      });
+
+      // 3s：先确认注入脚本跑起来了。
+      // 三条控件条要等远程媒体的元数据回来才凑得齐，而重页面上主线程会被媒体加载拖住
+      // （实测单次停顿 5s 以上），固定时刻做一次断言必然偶发假失败，所以这里轮询到 15s 再判。
+      setTimeout(function () {
+        note('注入', !!window.__nmbInstalled);
+        (function waitBars(tries) {
+          var bars = document.querySelectorAll('[data-nmb-controls]').length;
+          var hooked = document.querySelectorAll('[data-native-media]').length;
+          if (bars >= 3 || tries <= 0) {
+            note('控件条', bars >= 3, bars + '条/接管' + hooked + (bars >= 3 ? '' : '（已等到15s）'));
+            return;
+          }
+          setTimeout(function () { waitBars(tries - 1); }, 500);
+        })(24);
+      }, 3000);
+
+      // 5s：直接操作控件条滑块，模拟真实拖动，验证进度条拖动确实生效。
+      setTimeout(function () {
+        var v = document.getElementById('v1');
+        var bar = v.__nmbBar;
+        var seek = bar ? bar.querySelector('input[type=range]') : null;
+        if (!seek || !(v.duration > 0)) { note('拖动', false, '控件条或时长未就绪'); return; }
+        seek.value = '500';
+        seek.dispatchEvent(new Event('input'));
+        var expected = v.duration * 0.5;
+        setTimeout(function () {
+          note('拖动', Math.abs(v.currentTime - expected) < 2.5,
+               '期望' + expected.toFixed(1) + 's 实际' + v.currentTime.toFixed(1) + 's');
+        }, 800);
+      }, 5000);
+
+      // 6.5s：三个媒体一起播放，8s 检查是否都真的在播。
+      setTimeout(playAll, 6500);
+      setTimeout(function () {
+        var v1 = document.getElementById('v1'), v2 = document.getElementById('v2'), a1 = document.getElementById('a1');
+        note('视频1', !v1.paused && v1.duration > 0, '时长' + (v1.duration || 0).toFixed(1) + 's');
+        note('视频2', !v2.paused && v2.duration > 0, '时长' + (v2.duration || 0).toFixed(1) + 's');
+        note('音频', !a1.paused && a1.duration > 0);
+      }, 8000);
+
+      // 9s/12s：音频到底有没有进声卡。上面那条 "音频" 只查 !paused && duration>0 —— 那是"条目建起来了"，
+      // 解码线程一次都没往声卡写、或者 waveOut 打开失败时它照样成立，量不到声音。
+      // 真正能当判据的是音频元素的 currentTime：native 侧 audio.position 只有一个赋值点，
+      // 就在 waveOutWrite 成功之后（native_media_bridge.cpp 里 "waveOut 写入失败" 那段的下一行），
+      // 而 kind==audio 的 mediaPosition 直接返回它。所以 currentTime 往前走 == PCM 真的排进声卡了。
+      // 必须用墙钟对照：只比"两次采样差了多少"会把"根本没在跑"也算成正常。
+      var audioMark = 0, audioWall = 0;
+      setTimeout(function () {
+        var a1 = document.getElementById('a1');
+        audioMark = a1.currentTime; audioWall = Date.now();
+      }, 9000);
+      setTimeout(function () {
+        var a1 = document.getElementById('a1');
+        var wall = (Date.now() - audioWall) / 1000;
+        var advanced = a1.currentTime - audioMark;
+        note('音频输出', wall > 2 && advanced > 0.5,
+             '墙钟' + wall.toFixed(1) + 's 进度走' + advanced.toFixed(2) + 's');
+      }, 12000);
+
+      // 13s：视频那条的音轨到底怎么了。视频元素的 position 由视频线程回传，音轨走到哪一步过去
+      // 在页面侧完全不可见（openAudio 的失败路径全是静默 return false，视频分支还把返回值丢掉了），
+      // 于是"画面在放、就是没声音"只能靠肉眼发现。应答里现在带 audio（真值条件是解码器+waveOut+
+      // 缓冲池全部就绪）、apos、aerr，applyState 把整份应答原样留在 el.__nmbState.raw 上。
+      setTimeout(function () {
+        function raw(id) {
+          var el = document.getElementById(id);
+          var s = el && el.__nmbState;
+          return (s && s.raw) || {};
+        }
+        var r1 = raw('v1'), ra = raw('a1');
+        // 源里本来就没音轨是合法情况（aerr=no-stream），不算故障；其它原因都是真问题。
+        var bad = r1.aerr && r1.aerr !== 'no-stream';
+        note('视频音频', !bad && Number(r1.audio) === 1,
+             'v1[audio=' + r1.audio + ' apos=' + (r1.apos || 0).toFixed(1) +
+             ' err=' + (r1.aerr || '-') + '] a1[audio=' + ra.audio + ']');
+      }, 13000);
+
+      // 9s：媒体事件与接口名（playAll 在 6.5s，先给它两秒半）。
+      setTimeout(function () {
+        var core = ['loadedmetadata', 'loadeddata', 'canplay', 'canplaythrough'];
+        var miss = core.filter(function (n) { return !evHits[n]; });
+        note('媒体事件', miss.length === 0, miss.length ? '缺' + miss.join('/') : core.length + '个齐');
+        // 接口名：内核原样缺 MediaError/VideoPlaybackQuality（实测 undefined），由 kMediaApiShim 补；
+        // TimeRanges 是内核自带的，垫片不该去顶掉它（顶掉等于给站点换一套语义，mk 本来就跳过它）。
+        // 缺名字时站点一句 x instanceof MediaError 抛的是 "Right-hand side is not an object"，流程当场断。
+        var haveApi = typeof MediaError === 'function' && typeof TimeRanges === 'function' &&
+                      typeof VideoPlaybackQuality === 'function';
+        var trNative = !Object.getOwnPropertyDescriptor(TimeRanges, Symbol.hasInstance);
+        note('接口名', !!(haveApi && trNative),
+             (haveApi ? '错误码常量' + MediaError.MEDIA_ERR_DECODE : '缺接口名') +
+             '/TR' + (trNative ? '原生' : '被顶掉'));
+        // 判定：instanceof 判得对不对。TR 这一条守的是"桥造的替身也要过"——
+        // 内核自己的 buffered 判 instanceof TimeRanges 是**真**（实测），若接管后变假，
+        // 站点里那句判断就从真翻成假、把它自己挤到另一条支路上（asIf 挂原型就是修这个）。
+        // 用 length===1 认住"这是桥的替身"，否则元素没被接管时量到内核原生的 buffered，
+        // 这条断言会"过"，却什么也没守住。反向必须判假：一律返回 true 的假构造器过不了这一条。
+        var v1 = document.getElementById('v1');
+        var b = v1.buffered;
+        var meOk = haveApi && (new MediaError(3)) instanceof MediaError;
+        var trOk = !!b && b.length === 1 && b instanceof TimeRanges;
+        var negOk = !(({}) instanceof TimeRanges);
+        note('判定', !!(meOk && trOk && negOk), 'ME' + (meOk ? 1 : 0) + '/TR' + (trOk ? 1 : 0) +
+             '/反' + (negOk ? 1 : 0));
+        // 音量事件：桥的 setter 必须立刻回一个 volumechange，站点的音量图标就是靠它重画的。
+        var v = document.getElementById('v1'), before = evHits.volumechange || 0, old = v.volume;
+        try { v.volume = (old === 0.5 ? 0.4 : 0.5); v.volume = old; } catch (e) {}
+        note('音量事件', (evHits.volumechange || 0) > before);
+      }, 9000);
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NMB 控件条样式预览（真源同目录 *.css）</title>
+<!-- 直接引真源：改完任意一份 css，按 F5 就是这个页面 -->
+<link rel="stylesheet" href="base.css">
+<link rel="stylesheet" href="tier.css">
+<link rel="stylesheet" href="audio.css">
+<style>
+  /* 这一段只写"预览页自己的皮肤"，一条 [data-nmb-controls] 规则都不写 ——
+     预览里的控件条必须 100% 由那三份 css 决定，否则改了样式反而看不出真实效果。
+     （文件名不是 .css 结尾的都不会被 _nmb_gen_hooks_inc.py 拼进产物，本文件安全。） */
+  *{box-sizing:border-box}
+  body{margin:0;padding:0 0 60vh;background:#eef1f5;color:#1c1f24;
+       font:13px/1.6 "Microsoft YaHei",Arial,sans-serif}
+  body.dark{background:#23262b;color:#e6e9ef}
+  header{position:sticky;top:0;z-index:20;background:#1c1f24;color:#fff;
+         padding:9px 14px;display:flex;flex-wrap:wrap;gap:14px 18px;align-items:center;
+         box-shadow:0 2px 8px rgba(0,0,0,.3)}
+  header label{display:flex;gap:6px;align-items:center;font-size:12px;white-space:nowrap}
+  header input[type=range]{width:150px}
+  header code{background:rgba(255,255,255,.14);padding:0 5px;border-radius:3px;min-width:34px;text-align:center}
+  main{padding:16px 14px;max-width:920px}
+  h2{font-size:14px;margin:24px 0 6px}
+  h2:first-child{margin-top:4px}
+  .hint{color:#5a6472;font-size:12px;margin:0 0 10px}
+  body.dark .hint{color:#9aa4b2}
+  /* 元素盒子：预览里替代真实的 <video>/<audio> 占位（真实运行时这块是原生视频帧）。
+     overflow:hidden 是故意的 —— 它就是"会裁剪的祖先"的原型：本页的条是它的子元素，
+     滚动时由它自然裁切（运行时那条"被裁一点就整条不显示"的显隐口径不在这里演示）。 */
+  .box{position:relative;overflow:hidden;border-radius:4px;
+       /* 运行时包装盒就是网格容器（[data-nmb-wrap]），本页的盒子照抄同一形态：
+          条是它的网格项，贴格底=贴盒底。position:relative 只留给 .tag 那个绝对定位的小标签。 */
+       display:grid;grid-template-columns:minmax(0,1fr)}
+  .video{background:linear-gradient(135deg,#243b55,#141e30 55%,#3a1c71)}
+  .audio{background:#fff;border:1px solid #c9d1dc;border-radius:6px}
+  .box .tag{position:absolute;left:8px;top:6px;font-size:11px;color:rgba(255,255,255,.5)}
+  .audio .tag{color:#8b95a3}
+  /* 条的定位本页一条都不写：运行时与这里同形态——盒子是网格容器，条是它第 1 行第 1 列的
+     网格项，align-self:end 贴格底、fill 时 align-self:stretch 撑满，全在 base.css 里
+     （原来这两条 absolute + inset 已删；改回绝对定位就等于退回"脱离文档流"那版）。 */
+
+  /* 标尺：给"元素盒子"画个刻度底气，方便看条是不是真的贴在盒子底边内侧 */
+  .ruler{height:14px;background:repeating-linear-gradient(90deg,#c9d1dc 0,#c9d1dc 1px,transparent 1px,transparent 20px);opacity:.7;margin-top:2px}
+  table{border-collapse:collapse;font-size:12px;margin:4px 0 0}
+  th,td{border:1px solid #c9d1dc;padding:3px 9px;text-align:left}
+  body.dark th,body.dark td{border-color:#3a4048}
+  ul{margin:6px 0;padding-left:20px}
+  li{margin:2px 0}
+  kbd{background:#fff;border:1px solid #c9d1dc;border-radius:3px;padding:0 4px;font-size:11px}
+  body.dark kbd{background:#2b3037;border-color:#3a4048}
+</style>
+</head>
+<body>
+
+<header>
+  <label><input type="checkbox" id="paused" checked> 暂停中（记号=播放三角）</label>
+  <label><input type="checkbox" id="fill" checked> 音频条 fill（撑满盒子高）</label>
+  <label>元素盒子宽 <input type="range" id="boxw" min="150" max="760" value="480"><code id="boxwv">480</code></label>
+  <label>已播 <input type="range" id="pos" min="0" max="100" value="30"><code id="posv">30%</code></label>
+  <label>已缓冲 <input type="range" id="buf" min="0" max="100" value="64"><code id="bufv">64%</code></label>
+  <label><input type="checkbox" id="dark"> 深色页底（看对比度）</label>
+  <label><button id="reload">重载样式</button></label>
+</header>
+
+<main>
+  <p class="hint">
+    改 <code>base.css</code> / <code>tier.css</code> / <code>audio.css</code> 后按
+    <kbd>F5</kbd> 即可看到效果。控件条的 DOM（<code>buildBar</code> 那套 <code>data-*</code> 标记）
+    与全部外观都来自那三份 css + <code>hook/js/injection.js</code> 的 <code>buildBar</code>；
+    <b>本页的位置/宽度/高度是 CSS 给的</b>（条就放在盒子里，见本页 <code>&lt;style&gt;</code>
+    里的 <code>.box&gt;[data-nmb-controls]</code>），运行时同样是"条进包装盒 + CSS inset"。
+    所以这里看到的样子＝运行时的样子，连定位机制也是同一套。
+  </p>
+
+  <h2>视频条（直角 · 压在画面底边）</h2>
+  <p class="hint">盒子 16:9；条宽 = 盒子宽、贴在盒子底边内侧（这两句由 CSS 保证）。
+    宽 &lt;300 加 <code>data-nmb-narrow</code>，&lt;240 再加 <code>data-nmb-tiny</code>（拖上面的"元素盒子宽"看档位切换）。
+    本页的条在盒子里，滚动时由浏览器自然裁切；运行时"被裁掉一点就整条不显示"是 <code>placeBar</code>
+    的显隐策略，本页不演示（要看那个口径用真机的 <code>tests/testjs/_nmb_ui_lock.html</code>）。</p>
+  <div class="box video" id="vbox"><span class="tag">video 元素盒子（真实运行时这里是原生视频帧）</span></div>
+  <div class="ruler"></div>
+
+  <h2>音频条（四角圆角 · 更紧凑）</h2>
+  <p class="hint">盒子 54px 高（原生 <code>&lt;audio controls&gt;</code> 的占位高度），条内容高 38px，所以未开 fill 时上方会空出一条 —— 这正是要靠 fill 消掉的那条死区。</p>
+  <div class="box audio" id="abox"><span class="tag">audio 元素盒子</span></div>
+  <div class="ruler"></div>
+
+  <h2>分档阈值（tier.css）</h2>
+  <table>
+    <tr><th>条宽</th><th>属性</th><th>被收掉的控件</th></tr>
+    <tr><td>≥300px</td><td>—</td><td>全部显示（音量 70px / 音频 52px）</td></tr>
+    <tr><td>&lt;300px</td><td><code>data-nmb-narrow="1"</code></td><td>音量</td></tr>
+    <tr><td>&lt;240px</td><td>+ <code>data-nmb-tiny="1"</code></td><td>音量、总时长；进度条 min-width 降到 56px</td></tr>
+  </table>
+
+  <h2>本页复刻了什么、没复刻什么</h2>
+  <ul>
+    <li>复刻（都是 css 能决定的部分）：控件的 DOM 结构与 <code>data-*</code> 标记、条贴盒底内侧、宽度 = 盒子宽、音频 fill 撑满盒高、宽度分档（narrow/tiny）、进度条三段色带（走与运行时同款的"伪元素规则"机制，见下方脚本注释）、记号的三角/双竖条。</li>
+    <li>本页用 CSS 定位：条是盒子的子元素，<code>position:absolute;left:0;right:0;bottom:0</code>。尺寸一变就重判档位靠 <code>ResizeObserver</code>，进度/时间靠滑块事件 —— <b>没有按帧循环，空闲时页面零改动</b>。</li>
+    <li>没复刻：原生视频帧与"挖洞"合成（这里画面只是色块）、真实播放状态、<code>placeBar</code> 的显隐口径（元素被裁掉一点就整条不画）。</li>
+    <li>要看真机效果：编译后用 <code>tests/testjs/_nmb_ui_lock.html</code> 之类页面跑 <code>tests/test_bindwebview.py</code>。</li>
+  </ul>
+</main>
+
+<script>
+// ── 复刻 injection.js 的建条逻辑（DOM 与 data-* 标记）；位置尺寸全归 CSS，不搬 placeBar ──
+var DUR = 92; // 假时长 1:32，用于时间显示与进度条
+function fmtTime(v){var t=Math.floor(v||0);if(!(t>=0))return '--:--';var m=Math.floor(t/60),s=t%60;return m+':'+(s<10?'0':'')+s}
+
+// 与 buildBar 同样的 DOM：button[data-nmb-play]>i.nmb-mark + span[data-nmb-cur] + input.nmb-seek
+//                    + span[data-nmb-total] + input[data-nmb-vol] (+ button[data-nmb-fs]，音频没有)
+function makeBar(host,audio){
+  var bar=document.createElement('div');
+  bar.setAttribute('data-nmb-controls','1');
+  if(audio)bar.setAttribute('data-nmb-audio','1');
+  var btn=document.createElement('button');btn.type='button';btn.setAttribute('data-nmb-play','1');btn.title='播放或暂停';
+  var mark=document.createElement('i');mark.className='nmb-mark nmb-mark-play';btn.appendChild(mark);bar.__nmbMark=mark;
+  var cur=document.createElement('span');cur.setAttribute('data-nmb-cur','1');
+  var seek=document.createElement('input');seek.type='range';seek.min='0';seek.max='1000';seek.step='1';seek.value='0';
+  seek.className='nmb-seek';seek.setAttribute('data-nmb-seek','1');seek.title='进度';
+  var total=document.createElement('span');total.setAttribute('data-nmb-total','1');
+  var vol=document.createElement('input');vol.type='range';vol.min='0';vol.max='100';vol.step='1';vol.value='100';
+  vol.setAttribute('data-nmb-vol','1');vol.title='音量';
+  bar.appendChild(btn);bar.appendChild(cur);bar.appendChild(seek);bar.appendChild(total);bar.appendChild(vol);
+  if(!audio){var fs=document.createElement('button');fs.type='button';fs.textContent='⛶';fs.setAttribute('data-nmb-fs','1');bar.appendChild(fs)}
+  // 本页把条**放进盒子里**，位置/宽度/高度全交给 CSS（见 <style> 里 .box>[data-nmb-controls] 那两条）。
+  // 真实运行时是挂在 documentElement 下、由 placeBar 写视口坐标的 —— 因为原生帧画在页面之上，
+  // 条得待在合成层里才能被 native 挖洞露出来。那是运行时的约束，预览页没有合成层，不必跟着背。
+  host.appendChild(bar);
+  bar.__nmbOwner=host;
+  return bar;
+}
+
+var vBar=makeBar(document.getElementById('vbox'),false),
+    aBar=makeBar(document.getElementById('abox'),true),
+    bars=[vBar,aBar];
+
+// ── 宽度分档：只跟"盒子宽度变了"有关，交给 ResizeObserver，一次变更做一次 ────────
+// 档位属性（data-nmb-narrow / data-nmb-tiny）必须 JS 打，因为 tier.css 就是按属性选的；
+// 但这不是"每帧算几何"：盒子真的换尺寸了才落一次属性（拖滑块、改窗口）。
+function tierOf(w){return w<240?'tiny':(w<300?'narrow':'')}
+function applyTier(bar){
+  var t=tierOf(bar.__nmbOwner.getBoundingClientRect().width);
+  if(t===bar.__nmbTier)return;
+  bar.__nmbTier=t;
+  if(t){bar.setAttribute('data-nmb-'+t,'1')}
+  else{bar.removeAttribute('data-nmb-narrow');bar.removeAttribute('data-nmb-tiny')}
+}
+
+// ── 轨道三段色带：与 hook/js/injection.js 的 trackRule/paintTrack 同一套机制 ──
+// 仍然只是"JS 供值、样式归 CSS"，但喂料口不是自定义属性，而是一条自建的伪元素规则。
+// 原因：真机内核是 miniblink 2023（Chromium 60），它**丢弃一切经 setProperty 写的自定义属性**
+// —— 内联的丢、CSSOM 规则上的也丢（实测见 tests/testjs/_nmb_kb_feat.html，算出来是 var() 的回退值）。
+// 老写法 seek.style.setProperty('--nmb-track',…) 从来没送到轨道上，整条只剩回退灰、两段色带一起消失。
+var trackSeq=0;
+function trackRule(seek){
+  if(seek.__pvRule)return seek.__pvRule;
+  var id='nmb-p'+(++trackSeq);
+  // 选择器比 base.css 的 .nmb-seek::-webkit-slider-runnable-track 特异度高，不靠"谁后进文档"定胜负
+  seek.__pvSel='[data-nmb-controls] .nmb-seek[data-nmb-track-id="'+id+'"]';
+  seek.setAttribute('data-nmb-track-id',id);
+  var sh=document.createElement('style');document.head.appendChild(sh);
+  try{
+    sh.sheet.insertRule(seek.__pvSel+'::-webkit-slider-runnable-track{background:none}',0);
+    seek.__pvRule=sh.sheet.cssRules[0];
+  }catch(e){}
+  return seek.__pvRule;
+}
+function paintTrack(seek,grad){
+  var rule=trackRule(seek);
+  if(rule){try{rule.style.background=grad}catch(e){}}
+}
+
+// 记号 / 时间 / 进度条三段色带
+function syncBar(bar){
+  var E=bar.__nmbEls||(bar.__nmbEls={seek:bar.querySelector('[data-nmb-seek]'),
+                                      cur:bar.querySelector('[data-nmb-cur]'),
+                                      total:bar.querySelector('[data-nmb-total]')});
+  var p=Number(document.getElementById('pos').value)/100;
+  var b=Math.max(p,Number(document.getElementById('buf').value)/100);
+  var pct=Math.round(p*10000)/100,buf=Math.round(b*10000)/100;
+  // 进度/缓冲是"数据"，由 JS 供值；颜色形状照旧全在 base.css。
+  // 与 hook/js/injection.js 的 syncBar 同一套写法（六断点、绝不用双位置断点语法——
+  // 真机内核 Chromium 60 会把整条渐变判非法；变量走伪元素规则，不走 setProperty）。
+  paintTrack(E.seek,'linear-gradient(90deg,#1a73e8 0%,#1a73e8 '+pct+'%,rgba(255,255,255,.5) '+pct+'%,rgba(255,255,255,.5) '+buf+'%,rgba(255,255,255,.16) '+buf+'%,rgba(255,255,255,.16) 100%)');
+  E.seek.value=String(Math.round(p*1000));
+  E.seek.title='已缓冲到 '+fmtTime(Math.min(b*DUR,DUR));
+  E.cur.textContent=fmtTime(p*DUR);
+  E.total.textContent=fmtTime(DUR);
+  // 记号形状同样只切 class，三角/双竖条画在 CSS 里
+  bar.__nmbMark.className=document.getElementById('paused').checked?'nmb-mark nmb-mark-play':'nmb-mark nmb-mark-pause';
+}
+
+// 全部事件驱动：拖滑块/勾选框 → 跑一次 layout；盒子尺寸变化 → ResizeObserver 跑一次。
+// 没有任何按帧轮询，所以空闲时这一页一个字节都不动。
+function layout(){
+  var w=Number(document.getElementById('boxw').value);
+  document.getElementById('boxwv').textContent=String(w);
+  var vb=document.getElementById('vbox'),ab=document.getElementById('abox');
+  vb.style.width=w+'px';vb.style.height=Math.max(100,Math.round(w*9/16))+'px';
+  ab.style.width=w+'px';ab.style.height='54px';
+  document.getElementById('posv').textContent=document.getElementById('pos').value+'%';
+  document.getElementById('bufv').textContent=document.getElementById('buf').value+'%';
+  // fill 只是给条挂个属性，撑高由 CSS 做（见 <style> 里那条 [data-nmb-fill="1"]）
+  aBar.setAttribute('data-nmb-fill',document.getElementById('fill').checked?'1':'0');
+  bars.forEach(applyTier);
+  bars.forEach(syncBar);
+}
+
+// 盒子尺寸变了才重判档位（拖滑块改宽也会走到这里，所以别处不用再管档位）
+if(window.ResizeObserver){
+  var ro=new ResizeObserver(function(list){
+    for(var i=0;i<list.length;i++){
+      for(var j=0;j<bars.length;j++){
+        if(bars[j].__nmbOwner===list[i].target)applyTier(bars[j]);
+      }
+    }
+  });
+  ro.observe(document.getElementById('vbox'));
+  ro.observe(document.getElementById('abox'));
+}
+
+['boxw','pos','buf'].forEach(function(id){document.getElementById(id).addEventListener('input',layout)});
+['paused','fill'].forEach(function(id){document.getElementById(id).addEventListener('change',layout)});
+document.getElementById('dark').addEventListener('change',function(){document.body.classList.toggle('dark',this.checked)});
+document.getElementById('reload').addEventListener('click',function(){location.reload()});
+layout();
+</script>
+</body>
+</html>

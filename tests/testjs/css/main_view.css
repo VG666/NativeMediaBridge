@@ -1,0 +1,86 @@
+* {
+    margin: 0;
+    padding: 0;
+    -webkit-user-select: none;
+    cursor:Default;
+}
+button {
+    -webkit-app-region: no-drag;
+}
+#mian_frame {
+    width: 100%;
+    height: 100%;
+}
+#header {
+    width: 100%;
+    height: 60px;
+    background: #1f1d1e;
+    background-position :right center;
+    background-size: 100% 100%;  
+    background-size: cover;
+    user-select:none;
+    -webkit-user-select:none;
+    -webkit-app-region:drag;
+}
+
+.group-control button {
+    border: 0;
+    margin: 0;
+    padding: 0;
+    width: 30px;
+    height: 30px;
+    float: right;
+    display: block;
+    outline: none;
+    background-repeat: no-repeat;
+    background-blend-mode: multiply;
+    background-color: rgba(255, 255, 255, 0);
+    background-image: url(../img/btn-control.png);
+}
+
+.group-control button.btn-close {
+    background-position: 0 0;
+}
+.group-control button.btn-close:hover {
+    background-position: 0 -30px;
+}
+
+.group-control button.btn-close:active {
+    background-position: 0 -60px;
+}
+
+.group-control button.btn-max {
+    background-position: -30px 0;
+}
+
+.group-control button.btn-max:hover {
+    background-position: -30px -30px;
+}
+
+.group-control button.btn-max:active {
+    background-position: -30px -60px;
+}
+
+.group-control button.btn-restore {
+    background-position: -60px 0;
+}
+
+.group-control button.btn-restore:hover {
+    background-position: -60px -30px;
+}
+
+.group-control button.btn-restore:active {
+    background-position: -60px -90px;
+}
+
+.group-control button.btn-min {
+    background-position: -90px 0;
+}
+
+.group-control button.btn-min:hover {
+    background-position: -90px -30px;
+}
+
+.group-control button.btn-min:active {
+    background-position: -90px -60px;
+}

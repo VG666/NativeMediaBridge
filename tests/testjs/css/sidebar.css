@@ -1,0 +1,36 @@
+#sidebar{
+    width: 205px;
+    height: calc(100% - 121px);
+    float: left;
+    user-select: none;
+    background:#1a1819;
+    -moz-user-select: none;
+    -khtml-user-select: none;
+}
+#sidebar ul{
+    width: 100%;
+    height: 36px;
+}
+#sidebar1{
+    background:#483926;
+}
+#sidebar2{
+    z-index: 1;
+}
+#user{
+    float: left;
+    width: 205px;
+    height: 100%;
+    background:#1a1819;
+}
+#Sign{
+    position: relative;
+    top: 15px;
+    left: 15px;
+    width: 33px;
+    height: 33px;
+     /* 以父元素的百分比来设置背景图像的宽度和高度。*/
+    background-size: 100% 100%;
+    border-radius:100%;
+    -webkit-app-region: no-drag;
+}

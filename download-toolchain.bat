@@ -1,0 +1,1 @@
+powershell -ExecutionPolicy Bypass -File .\download-toolchain.ps1

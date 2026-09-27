@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>原生 H5 媒体播放</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      padding: 32px;
+      color: #e8edf5;
+      background: #0b0f17;
+      font-family: Arial, "Microsoft YaHei", sans-serif;
+    }
+    main { width: min(920px, 100%); margin: 0 auto; }
+    h1 { margin: 0 0 24px; font-size: 28px; }
+    section {
+      margin-bottom: 24px;
+      padding: 20px;
+      border: 1px solid #283244;
+      border-radius: 12px;
+      background: #151b26;
+    }
+    h2 { margin: 0 0 14px; font-size: 18px; }
+    video { display: block; width: 100%; min-height: 360px; background: #000; }
+    audio { display: block; width: 100%; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>原生 H5 媒体播放</h1>
+    <section>
+      <h2>视频</h2>
+      <video controls preload="metadata" src="https://media.w3.org/2010/05/sintel/trailer.mp4">
+        当前浏览器不支持 HTML5 video。
+      </video>
+    </section>
+    <section>
+      <h2>音频</h2>
+      <audio controls preload="metadata" src="https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3">
+        当前浏览器不支持 HTML5 audio。
+      </audio>
+    </section>
+  </main>
+</body>
+</html>
