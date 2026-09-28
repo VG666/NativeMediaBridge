@@ -41,6 +41,19 @@ unsigned keyFlags(LPARAM lParam) {
     if (lParam & (1 << 24)) flags |= 0x0100;
     return flags;
 }
+
+void fireBrowserWheel(Browser* browser, WPARAM wParam, LPARAM lParam, bool horizontal) {
+    if (!browser || !browser->view || !browser->hwnd || !g_kernel.fireMouseWheelEvent) return;
+    // mb108 的 fireMouseWheelEvent 参数语义是页面视口客户区坐标。虽然 WebView 绑定到
+    // 屏幕外 kernelHwnd，命中测试仍必须使用可见 browser->hwnd 的本地坐标；若转换到
+    // kernelHwnd，会得到约 32000 的越界坐标，DOM wheel 和 overflow 滚动都无法命中。
+    POINT point{static_cast<short>(LOWORD(lParam)), static_cast<short>(HIWORD(lParam))};
+    ScreenToClient(browser->hwnd, &point);
+    const int delta = static_cast<short>(HIWORD(wParam));
+    unsigned flags = mouseFlags(wParam);
+    if (horizontal) flags |= 4; // WKE_SHIFT: miniblink wheel API has no axis parameter.
+    g_kernel.fireMouseWheelEvent(browser->view, point.x, point.y, delta, flags);
+}
 // ── §8 宿主窗口过程：输入转发、合成与窗口控制 ────────────────────────────
 // 该窗口是宿主唯一可见的表面。关键消息：
 //   WM_PAINT      只按 ps.rcPaint 脏区调 paintBrowser 合成（见文件头链路图）；
@@ -65,6 +78,12 @@ LRESULT CALLBACK browserWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARA
                 PostMessageW(root, WM_SYSCOMMAND, wParam, lParam);
                 return 0;
             }
+        }
+        // mbSetFocus 可能把系统焦点留在屏幕外的绑定窗；滚轮随后会投递到这里，
+        // 不能让 DefWindowProc 丢掉，转交给真正可见的桥窗口处理。
+        if ((message == WM_MOUSEWHEEL || message == WM_MOUSEHWHEEL) && owner->hwnd) {
+            fireBrowserWheel(owner, wParam, lParam, message == WM_MOUSEHWHEEL);
+            return 0;
         }
         return DefWindowProcW(hwnd, message, wParam, lParam);
     }
@@ -228,11 +247,9 @@ LRESULT CALLBACK browserWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARA
             PostMessageW(hwnd, WM_APP + 3, 0, 0);
         return 0;
     }
-    case WM_MOUSEWHEEL: {
-        POINT point{static_cast<short>(LOWORD(lParam)), static_cast<short>(HIWORD(lParam))};
-        ScreenToClient(hwnd, &point);
-        const int delta = static_cast<short>(HIWORD(wParam));
-        if (view && g_kernel.fireMouseWheelEvent) g_kernel.fireMouseWheelEvent(view, point.x, point.y, delta, mouseFlags(wParam));
+    case WM_MOUSEWHEEL:
+    case WM_MOUSEHWHEEL: {
+        fireBrowserWheel(browser, wParam, lParam, message == WM_MOUSEHWHEEL);
         return 0;
     }
     case WM_SETCURSOR: {

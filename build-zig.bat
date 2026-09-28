@@ -34,7 +34,7 @@ echo [build-zig] 使用 %ZIG%
 
 rem 注入脚本的真源是 hook\js\*.js：编译前重新生成 hook\inc\*.inc（没装 python 则沿用随仓 inc）。
 where python >nul 2>nul && (
-    python _nmb_gen_hooks_inc.py || exit /b 1
+    python utility\_nmb_gen_hooks_inc.py || exit /b 1
 ) || echo [build-zig] 未找到 python，沿用现有 hook\inc\*.inc
 
 "%ZIG%" c++ -target x86_64-windows-gnu -std=c++17 -O2 ^
