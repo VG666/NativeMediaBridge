@@ -153,6 +153,17 @@ bool mediaBridgeDisabled() {
     return disabled;
 }
 
+// 内部绘制模式：视频帧不再由本桥用 GDI 叠在离屏页面位图上（浏览器外部画），
+// 而是交给页面里的 canvas，由内核在 DOM 内部绘制。**默认开启**——这也是用户
+// 明确要求的唯一形态；设 NMB_NO_INTERNAL_DRAW=1 退回旧的 GDI 贴帧做对照。
+bool internalDrawEnabled() {
+    static const bool enabled = [] {
+        char buffer[8]{};
+        return GetEnvironmentVariableA("NMB_NO_INTERNAL_DRAW", buffer, sizeof(buffer)) == 0;
+    }();
+    return enabled;
+}
+
 // 诊断开关：设 NMB_NO_HOLES=1 就停掉页面侧的覆盖物采集（collectHoles 恒返回空串），
 // 合成退化为"视频帧盖住一切"。用来对照崩溃/卡顿是不是高频 elementsFromPoint 引起的。
 bool holePunchDisabled() {
@@ -163,9 +174,16 @@ bool holePunchDisabled() {
     return disabled;
 }
 
-// 按诊断开关拼注入前缀：目前只负责把 NMB_NO_HOLES 传进页面。
+// 按诊断开关拼注入前缀：NMB_NO_HOLES 关掉覆盖物采集，NMB_INTERNAL_DRAW 打开内部绘制
+// （画面进 DOM 里的 canvas，由内核自己画；native 不再把帧叠在离屏页面位图上）。
 const char* injectionPrefix() {
-    return holePunchDisabled() ? "window.__nmbNoHoles=1;" : "";
+    static const std::string prefix = [] {
+        std::string out;
+        if (holePunchDisabled()) out += "window.__nmbNoHoles=1;";
+        if (internalDrawEnabled()) out += "window.__nmbInternalDraw=1;";
+        return out;
+    }();
+    return prefix.c_str();
 }
 // 用来对照"页面卡死/进程消失到底是内核的加密分支造成的，还是别的原因"。
 bool cryptoShimDisabled() {

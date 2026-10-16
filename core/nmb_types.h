@@ -189,6 +189,9 @@ struct Media {
     std::vector<unsigned char> bgra;
     int frameWidth{};
     int frameHeight{};
+    // 内部绘制模式（NMB_INTERNAL_DRAW=1）下页面每解码一帧就 +1：
+    // 页面只在序号变化时取帧，避免每帧都走一次 JS 通道。
+    std::atomic<long long> frameSeq{0};
     double fps{25.0};
     std::atomic<double> position{0.0};
     double duration{};

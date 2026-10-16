@@ -71,6 +71,8 @@ void publishFrame(Media* media, AVFrame* frame) {
         media->frameWidth = frame->width;
         media->frameHeight = frame->height;
     }
+    // 内部绘制模式下页面按序号拉取新帧；序号在帧写完之后推进，页面读到的必然是完整帧。
+    media->frameSeq.fetch_add(1, std::memory_order_relaxed);
     if (!media->stop) notifyComposite(media->browser);
 }
 
@@ -759,12 +761,14 @@ void openMediaAsync(Media* media, WebView view, HWND hwnd) {
         }
         std::lock_guard<std::mutex> lock(owner->mutex);
         media->openOk = ok;
-        media->openError = ok ? std::wstring() : L"open-failed";
+        // openError 要存 FFmpeg 的真实失败点（openInput/找流/解码器…各自的 setError 文本）：
+        // 后台线程收尾时全局 g_error 正是最后那次失败的原因，抄进来经 open 应答回给页面。
+        media->openError = ok ? std::wstring() : lastErrorText();
         media->openRunning = false;
         auto it = owner->media.find(media->id);
         const bool listed = it != owner->media.end() && it->second == media;
         if (!listed) releaseMediaAsync(media);
-        else if (!ok) media->openError = L"open-failed";
+        else if (!ok) media->openError = lastErrorText();
     }).detach();
 }
 

@@ -4,6 +4,9 @@
   // 整体兜住异常并在出错时复位标记，保证后面还有机会重新注入。
   try{
     var seq=0,session='';
+    // 内部绘制模式：由 native 在注入前缀里置 1（NMB_INTERNAL_DRAW=1）。
+    // 打开后画面画进 DOM 里的 canvas，而不是让 native 把帧叠在离屏页面位图上。
+    window.__nmbInternalDraw=window.__nmbInternalDraw||false;
     // 文档/子 frame 独立的随机会话，不能只用各自从 1 开始的元素序号。
     try{var random=new Uint32Array(4);window.crypto.getRandomValues(random);session=Array.prototype.join.call(random,'-')}catch(e){}
     if(!session)session=Date.now().toString(36)+'-'+Math.random().toString(36).slice(2)+'-'+Math.random().toString(36).slice(2);
@@ -753,11 +756,118 @@
       // 音频没有画面：只要站点给了可见的盒子（pinBox 认过宽度），即便它本来不带原生控件，
       // 那块盒子在页面上也只是个空洞，照样给它一条控件条。
       if(el.__nmbWantsBar||boxed)buildBar(el);
+      // 内部绘制：把解码帧画进 DOM 里的 canvas，由内核（miniblink）自己绘制，
+      // 而不是让 native 把帧叠在离屏页面位图上（那样等于在浏览器外部画）。
+      if(window.__nmbInternalDraw)mountCanvas(el);
       // 兑现接管之前页面就表达过的播放意图（采样见 hook 与 sniff）：走接管后的 el.play()，
       // 它会 fire play → 上面那个捕获监听发 play op。少了这一步，页面在接管前调过的 play() 永远
       // 到不了原生解码器：条目建好了、矩形也对，只是 native 侧 paused 恒 true —— 视频区只剩页面
       // 底色、也听不到声音，而页面侧 paused 已是 false、play() 早已 resolve，站点以为一直在播。
       if(el.__nmbWantPlay){el.__nmbWantPlay=false;try{el.play()}catch(e){}}
+    }
+    // ── 内部绘制：在元素盒里挂 canvas，由内核在 DOM 内部画帧 ─────────────────
+    // 画面落在页面 DOM 里（canvas 是普通元素），所以它天然参与页面层级、裁剪、
+    // 命中测试与站点覆盖物——这正是"贴帧"做法做不到的那几件事。
+    function mountCanvas(el){
+      try{
+        if(el.__nmbCanvas||el.tagName!=='VIDEO')return;
+        // 挂载点优先用桥的包装盒；没有包装盒时先给元素套一个（wrapEl：条的同款机制，
+        // 自带 position:relative，canvas absolute 100% 才只会盖住元素盒而不是整个页面）。
+        // 套盒失败（站点布局冲突，wrapEl 会当场拆包回退）就退回父节点兜底。
+        // wrap 的定位规则在桥的样式表里（[data-nmb-wrap]{position:relative}），
+        // 而样式表由 buildBar 安装——无 controls 的视频不走那条路，必须在这里补装，
+        // 否则 wrap 是个无定位 div，absolute canvas 会锚到视口、铺满整个窗口。
+        var wrap=el.__nmbWrap||wrapEl(el)||el.parentNode;
+        if(!wrap)return;
+        ensureBarStyle(document);
+        var cv=document.createElement('canvas');
+        cv.setAttribute('data-nmb-canvas','1');
+        // 覆盖元素盒：不动元素本身的布局，只把画面盖在它上面同一块区域。
+        cv.style.position='absolute';cv.style.left='0';cv.style.top='0';
+        cv.style.width='100%';cv.style.height='100%';
+        cv.style.pointerEvents='none';   // 点击/悬浮照旧落在站点自己的元素与控件上
+        cv.style.zIndex='1';
+        // 画面填充方式跟随视频元素自己的 object-fit（默认 contain=保持比例留黑边；
+        // 页面写 object-fit:fill/cover 即铺满/裁满——与原生 <video> 语义完全一致）。
+        // 页面也可以直接对 [data-nmb-canvas] 写 CSS 覆盖这里的内联值。
+        cv.style.objectFit='contain';
+        wrap.appendChild(cv);
+        el.__nmbCanvas=cv;el.__nmbCtx=cv.getContext('2d');
+        // 取帧循环：按浏览器的刷新节奏走，解码那边没新帧就什么也不做。
+        var last='';var busy=false;
+        function pump(){
+          if(!el.__nmbCanvas||!attached(el))return;
+          if(!busy){
+            busy=true;
+            send(el,'frame',null,function(el2,data){
+              busy=false;
+              try{
+                if(!el2.__nmbCtx)return;
+                if(!data||!data.ok||!data.data){return}
+                // 同一帧不重复解码：连续几帧没有新画面时省掉整条解码。
+                if(data.data===last)return;
+                last=data.data;
+                var c=el2.__nmbCanvas,ctx=el2.__nmbCtx;
+                if(!c||!ctx)return;
+                if(data.mime==='raw'){
+                  // 裸 BGRA：atob 回字节、按行塞进 ImageData 交 putImageData。
+                  var bin=atob(data.data),n=bin.length;
+                  if(n<data.w*data.h*4)return;
+                  var u8=new Uint8ClampedArray(data.w*data.h*4);
+                  for(var i=0;i<n;i+=4){
+                    // BGRA → RGBA
+                    u8[i]=bin.charCodeAt(i+2);u8[i+1]=bin.charCodeAt(i+1);
+                    u8[i+2]=bin.charCodeAt(i);u8[i+3]=255;
+                  }
+                  if(c.width!==data.w)c.width=data.w;
+                  if(c.height!==data.h)c.height=data.h;
+                  ctx.putImageData(new ImageData(u8,data.w,data.h),0,0);
+                  return;
+                }
+                var img=el2.__nmbImg;
+                if(!img)img=el2.__nmbImg=new Image();
+                img.onload=function(){
+                  try{
+                    var cc=el2.__nmbCanvas;
+                    if(!cc||!el2.__nmbCtx)return;
+                    if(cc.width!==img.width)cc.width=img.width;
+                    if(cc.height!==img.height)cc.height=img.height;
+                    el2.__nmbCtx.drawImage(img,0,0);
+                  }catch(e){}
+                };
+                img.src='data:image/jpeg;base64,'+data.data;
+              }catch(e){}
+            });
+          }
+          if(el.__nmbCanvas)el.__nmbFrameRaf=requestAnimationFrame(pump);
+        }
+        pump();
+        // rAF 兜底：这个离屏内核里 rAF 会停摆（扫描循环就死在这上面），
+        // 用定时器并行驱动取帧；没新帧时取帧请求本身就很轻。
+        el.__nmbFrameTimer=setInterval(function(){try{pump()}catch(e){}},66);
+        // object-fit 跟随：页面改 <video> 的 object-fit（铺满/保持比例切换）后，
+        // canvas 在 500ms 内跟上。canvas 自身的 objectFit 若被页面 CSS 直接指定，
+        // 这里的内联同步会被站点规则覆盖（内联优先级低于 !important，高于普通规则——
+        // 所以想锁死就直接写 !important），两种控制方式互不冲突。
+        el.__nmbFitTimer=setInterval(function(){
+          try{
+            if(!el.__nmbCanvas)return;
+            var fit='';
+            try{fit=getComputedStyle(el).objectFit||''}catch(e){}
+            if(fit&&fit!=='auto'&&el.__nmbCanvas.style.objectFit!==fit)el.__nmbCanvas.style.objectFit=fit;
+          }catch(e){}
+        },500);
+      }catch(e){}
+    }
+    function unmountCanvas(el){
+      try{
+        if(el.__nmbFrameRaf&&window.cancelAnimationFrame)cancelAnimationFrame(el.__nmbFrameRaf);
+        el.__nmbFrameRaf=null;
+        if(el.__nmbFrameTimer){clearInterval(el.__nmbFrameTimer);el.__nmbFrameTimer=null}
+        if(el.__nmbFitTimer){clearInterval(el.__nmbFitTimer);el.__nmbFitTimer=null}
+        if(el.__nmbCanvas&&el.__nmbCanvas.parentNode)el.__nmbCanvas.parentNode.removeChild(el.__nmbCanvas);
+      }catch(e){}
+      el.__nmbCanvas=null;el.__nmbCtx=null;el.__nmbImg=null;
     }
     // 接管一个元素：先问原生解码器能不能打开，能打开才改写它的属性、隐藏原生控件并接管事件；
     // 打不开的元素一个属性都不改，原样交还给内核和站点。
@@ -768,9 +878,12 @@
         if(el.__nmbId)send(el,'close');
         el.__nmbGeneration=(el.__nmbGeneration||0)+1;el.__nmbId=null;
         el.__nmbSkip=true;el.__nmbRetryAt=0;
-        fire(el,['error']);return;
+        if(el.__nmbRetrier){clearTimeout(el.__nmbRetrier);el.__nmbRetrier=null}
+        fire(el,['error']);return 0;
       }
-      el.__nmbRetryAt=Date.now()+Math.min(200*Math.pow(2,el.__nmbTries-1),8000);
+      var backoff=Math.min(200*Math.pow(2,el.__nmbTries-1),8000);
+      el.__nmbRetryAt=Date.now()+backoff;
+      return backoff;
     }
     // Explicit calls reset exhaustion; ticks and native events remain bounded.
     function recoverSkipped(el){
@@ -834,7 +947,14 @@
         if(data&&data.ok){el.__nmbTries=0;el.__nmbRetryAt=0;adopt(el);return}
         // 失败条目必须关闭，下一次才能真的重开；busy 仅轮询同一 native open。
         if(!data||!data.busy){send(el,'close');el.__nmbId=null;el.__nmbGeneration++}
-        retryOpen(el);
+        var backoffMs=retryOpen(el);
+        // 重试自驱动：到点直接再进 hook()，不等扫描循环。离屏内核里 rAF/定时器驱动的
+        // syncAll 不可靠（实测会一次都不跑），靠它重试的话 busy 之后元素就永远卡死。
+        if(backoffMs>0&&!el.__nmbRetrier){
+          el.__nmbRetrier=setTimeout(function(){
+            el.__nmbRetrier=null;hook(el);
+          },backoffMs+60);
+        }
       });
     }
     // 把元素还给内核和站点（元素被移出 DOM，或站点把 src 换成了 MSE 的 blob: 地址）。
@@ -842,8 +962,10 @@
       if(el.__nmbId)send(el,'close');
       el.__nmbGeneration=(el.__nmbGeneration||0)+1;el.__nmbId=null;
       if(el.__nmbOpenGuard){clearTimeout(el.__nmbOpenGuard);el.__nmbOpenGuard=null}
+      if(el.__nmbRetrier){clearTimeout(el.__nmbRetrier);el.__nmbRetrier=null}
       el.__nmbOpening=false;el.__nmbSeeking=false;el.__nmbState=null;
       el.__nmbWantPlay=undefined;el.__nmbEverWanted=false;
+      if(el.__nmbCanvas)unmountCanvas(el);
       if(el.__nmbBar){
         // 轨道规则挂在 head 上（不在条里），条删了它不会走，先收掉再删条。
         removeTrackSheet(el.__nmbBar);
@@ -1148,6 +1270,7 @@
       var q=document.querySelectorAll('audio,video');
       for(var i=0;i<q.length;i++){
         var el=q[i];
+        window.__nmbScanCount=(window.__nmbScanCount||0)+1;
         var r=el.getBoundingClientRect();
         // 组件被隐藏（站点 display:none / 折叠面板 / 切走的 tab）时元素**还在 DOM 里**，
         // 所以 dropDetached 管不到它，可画面和控件条都已经没了——不管的话原生那一路会一直解码
@@ -1215,7 +1338,25 @@
     // 看起来就像视频在跟着页面滚动。
     var raf=window.requestAnimationFrame||function(fn){return setTimeout(fn,16)};
     function tick(){syncAll();raf(tick)}
-    raf(tick);
+    // 离屏内核里定时器有两层坑：rAF 不保证持续回调；且**早期上下文注册的定时器
+    // 会在文档就绪时整批作废**（实测：注入期注册的 setInterval 只赋值不派发，
+    // syncAll 一次都不跑；页面 script 里注册的定时器却正常）。所以兜底定时器
+    // 一律推迟到 DOMContentLoaded 之后注册——那时上下文才是最终存活的。
+    function armTimers(){
+      if(window.__nmbTimersLive)return;
+      window.__nmbTimersLive=true;
+      try{raf(tick)}catch(e){}
+      setInterval(function(){try{syncAll()}catch(e){}},500);
+      // native 驱动的兜底入口（WM_TIMER 经 mbRunJs 调用）：页面侧定时器世界
+      // 在部分页面上整批不派发，这条通道已被 hover polyfill 长期验证是活的。
+      window.__nmbIdleScan=function(){try{syncAll()}catch(e){}};
+    }
+    // 立即先装（早期上下文的定时器在部分页面上确实活着），DOMContentLoaded 再装一次；
+    // 内核里 DOMContentLoaded 可能不触发（和 rAF 停摆同族），不能只押事件。
+    try{armTimers()}catch(e){}
+    if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',armTimers)}
+    // 自链保活：实测页面自身有活跃 setTimeout 时，桥的定时器也随之被派发。
+    (function keepAlive(){setTimeout(keepAlive,200)})();
     function syncLayout(){markHoles();syncAll()}
     window.addEventListener('scroll',syncLayout,true);
     window.addEventListener('resize',syncLayout,true);
@@ -1251,7 +1392,7 @@
       }catch(e){}
     }
     reportTitle();document.addEventListener('DOMContentLoaded',reportTitle);
-  }catch(e){window.__nmbInstalled=false}
+  }catch(e){window.__nmbInstalled=false;window.__nmbInitErr=String(e&&e.message||e).slice(0,120)}
 })();(function(){
   if(window.__nmbHoverOn)return;window.__nmbHoverOn=true;
   var hasPE=false;try{hasPE=typeof window.PointerEvent==='function'}catch(e){}

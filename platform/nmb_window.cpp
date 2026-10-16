@@ -64,29 +64,6 @@ void fireBrowserWheel(Browser* browser, WPARAM wParam, LPARAM lParam, bool horiz
 //   WM_SETCURSOR  按页面上报的 cursorType 设置箭头/手型/光标；
 //   WM_CLOSE/DESTROY/SIZE 止声、同步内核表面尺寸与重绘。
 LRESULT CALLBACK browserWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
-    // 绑定窗（kernelHwnd）走的是同一个窗口类，用 NMB_KERNEL 区分：它不是可视宿主，
-    // 只处理一件事——把内核"可拖动区域"的拖动请求转给真正可见的顶层窗口。
-    if (auto* owner = reinterpret_cast<Browser*>(GetPropW(hwnd, L"NMB_KERNEL"))) {
-        // mbFireMouseEvent 在按下 CSS `-webkit-app-region: drag` 节点时会向"绑定窗的根窗"
-        // 投递 WM_SYSCOMMAND/SC_MOVE。绑定窗是永不显示的离屏工具窗、自身就是根窗，系统于是
-        // 去拖那个看不见的窗口：用户端完全没反应（表现为无边框窗口拖不动）。这里把这条消息
-        // 改投到可见宿主窗所在的顶层窗口，交给系统按原生方式拖动真正可见的窗口。
-        if (message == WM_SYSCOMMAND && (wParam & 0xFFF0) == SC_MOVE) {
-            HWND root = owner->hwnd;
-            if (root) {
-                for (HWND parent = GetParent(root); parent; parent = GetParent(root)) root = parent;
-                PostMessageW(root, WM_SYSCOMMAND, wParam, lParam);
-                return 0;
-            }
-        }
-        // mbSetFocus 可能把系统焦点留在屏幕外的绑定窗；滚轮随后会投递到这里，
-        // 不能让 DefWindowProc 丢掉，转交给真正可见的桥窗口处理。
-        if ((message == WM_MOUSEWHEEL || message == WM_MOUSEHWHEEL) && owner->hwnd) {
-            fireBrowserWheel(owner, wParam, lParam, message == WM_MOUSEHWHEEL);
-            return 0;
-        }
-        return DefWindowProcW(hwnd, message, wParam, lParam);
-    }
     auto* browser = reinterpret_cast<Browser*>(GetPropW(hwnd, L"NMB_BROWSER"));
     if (!browser) return DefWindowProcW(hwnd, message, wParam, lParam);
     WebView view = browser->view;
@@ -113,71 +90,33 @@ LRESULT CALLBACK browserWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARA
         const int width = LOWORD(lParam);
         const int height = HIWORD(lParam);
         if (view && width > 0 && height > 0) {
-            // 绑定窗与 view 保持同尺寸，避免内核直绘/脏区计算按旧尺寸裁切帧缓冲。
-            if (browser->kernelHwnd) SetWindowPos(browser->kernelHwnd, nullptr, -32000, -32000,
-                                                   width, height, SWP_NOZORDER | SWP_NOACTIVATE);
             g_kernel.resize(view, width, height);
         }
         InvalidateRect(hwnd, nullptr, FALSE);
         return 0;
     }
     case WM_PAINT: {
+        // 上屏渲染：内核绑定的就是这扇窗、自己画，这里交给默认过程即可。
+        // 曾经的 paintBrowser 离屏合成（getViewDC 拷贝 + 视频贴帧）随绑定窗一起退役。
         PAINTSTRUCT ps{};
-        HDC dc = BeginPaint(hwnd, &ps);
-        // 只合成**脏区**（ps.rcPaint），不要读 GetClientRect 整窗：paintBrowser 读的是内核的
-        // getViewDC —— 那是内核正在往里画的实时帧缓冲，滚动时它分块重绘，整窗重刷会把"画到一半的
-        // 页面"一起 blit 上屏（滚动时整窗闪、且每帧白刷一遍整块 framebuffer）。
-        // paintBrowser 本来就按传进来的 target 做偏移，传脏区即可。
-        paintBrowser(browser, dc, ps.rcPaint);
+        BeginPaint(hwnd, &ps);
         EndPaint(hwnd, &ps);
-        return 0;
+        return DefWindowProcW(hwnd, message, wParam, lParam);
     }
     case WM_APP + 2:
-        // 标志在这里才清掉，期间积累的合成请求已经被合并掉了。
+        // 帧线程的合成通知：上屏模式下视频帧由页面 canvas 绘制（内部绘制），
+        // native 不再上屏任何东西。保留消息入口只为清掉合并标志，什么都不做。
         browser->paintPosted.store(false);
-        {
-            // 这条只由"新视频帧到了"触发，而视频帧只会盖住它自己的矩形：把脏区收窄到这些矩形上。
-            // 过去无条件 InvalidateRect(整窗) 等于每帧重刷整窗（见 WM_PAINT 的注释）。
-            RECT dirty{};
-            bool any = false;
-            std::lock_guard<std::mutex> lock(browser->mutex);
-            for (const auto& item : browser->media) {
-                Media* media = item.second;
-                if (!media || media->kind != L"video") continue;
-                const RectI& r = media->rect;
-                if (r.width <= 0 || r.height <= 0) continue;
-                RECT box{r.x, r.y, r.x + r.width, r.y + r.height};
-                if (!any) { dirty = box; any = true; } else UnionRect(&dirty, &dirty, &box);
-            }
-            // 没有视频条目（页面自己重绘）时仍旧整窗，交给内核的 onWebViewPainted 去收窄。
-            if (any) InvalidateRect(hwnd, &dirty, FALSE);
-            else InvalidateRect(hwnd, nullptr, FALSE);
-        }
         return 0;
-    case WM_APP + 3: {
-        // 鼠标移动合流的落点：一轮消息循环里无论到了多少条 WM_MOUSEMOVE，这里只按最新坐标调一次
-        // JS。页面的 hover polyfill 用 elementsFromPoint 命中并合成事件；polyfill 尚未注入
-        // （页面早期）或内核没导出取主 frame 的接口时直接跳过。
-        // 档3的 cursor 值由 polyfill 通过 mbQuery 异步通知 native（见 mediaBridge 的 cursor op），
-        // 不在这里碰 title（避免与诊断脚本的 title 回传机制冲突）。
+    case WM_APP + 3:
+        // hover 合流消息：离屏模式的历史产物（polyfill 补偿）。上屏模式下内核
+        // 直接收真实 WM_MOUSEMOVE，hover 由内核原生处理，这里没有触发源、无事可做。
         browser->mousePosted.store(false);
-        if (view && g_kernel.runJsByFrame && g_kernel.getMainFrame) {
-            Frame frame = g_kernel.getMainFrame(view);
-            if (frame) {
-                char code[96];
-                const int n = std::snprintf(code, sizeof(code),
-                                            "window.__nmbHoverMove&&window.__nmbHoverMove(%d,%d);",
-                                            browser->mouseX.load(), browser->mouseY.load());
-                if (n > 0 && n < static_cast<int>(sizeof(code)))
-                    g_kernel.runJsByFrame(view, frame, code, 0, nullptr, nullptr, nullptr);
-            }
-        }
         return 0;
-    }
     case WM_SETFOCUS:
         if (view && g_kernel.setFocus && !browser->syncingKernelFocus) {
-            // mbSetFocus 会把 Win32 焦点转给绑定的 kernelHwnd。让内核先完成逻辑聚焦，再立即把
-            // 系统焦点送回用户可见窗；同步期间产生的 KILL/SETFOCUS 是内部跳转，不能反向 killFocus。
+            // mbSetFocus 会把 Win32 焦点转给 view 绑定的 HWND；上屏模式下绑的就是本窗，
+            // 通常不会再跳。保守保留同步逻辑：内核若仍有内部焦点迁移，这里兜回来。
             browser->syncingKernelFocus = true;
             g_kernel.setFocus(view);
             if (GetFocus() != hwnd) SetFocus(hwnd);
@@ -232,19 +171,11 @@ LRESULT CALLBACK browserWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARA
     case WM_MOUSEMOVE: {
         const int mx = static_cast<short>(LOWORD(lParam));
         const int my = static_cast<short>(HIWORD(lParam));
-        // 无按键移动只交给 hover polyfill。离屏模式下内核的无按键 move 不会正常派发 DOM
-        // 事件，但仍可能更新内部 hover/触发一次重绘；再叠加下面的合成 mousemove 会让同一
-        // 次悬浮产生两套 hover 状态切换，表现为按钮/覆盖层闪烁。按住按钮拖动时仍交给内核，
-        // 保持原生拖拽手势的连续性。
-        const bool dragging = (wParam & (MK_LBUTTON | MK_MBUTTON | MK_RBUTTON | MK_XBUTTON1 | MK_XBUTTON2)) != 0;
-        if (dragging && view && g_kernel.fireMouseEvent)
+        // 上屏模式下内核直接收真实窗口消息：无按键移动按住拖动时仍显式转发给内核
+        // （保持原生拖拽手势连续性），无按键移动交给内核自己的 hover 处理——
+        // 不再需要 hover polyfill（那是离屏模式对"内核收不到真实 move"的补偿）。
+        if (view && g_kernel.fireMouseEvent)
             g_kernel.fireMouseEvent(view, message, mx, my, mouseFlags(wParam));
-        // 同时把坐标合流给页面 hover polyfill（mb108 自己不为无按键移动派发 DOM 事件）。
-        browser->mouseX.store(mx);
-        browser->mouseY.store(my);
-        bool expected = false;
-        if (browser->mousePosted.compare_exchange_strong(expected, true))
-            PostMessageW(hwnd, WM_APP + 3, 0, 0);
         return 0;
     }
     case WM_MOUSEWHEEL:
@@ -252,20 +183,20 @@ LRESULT CALLBACK browserWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARA
         fireBrowserWheel(browser, wParam, lParam, message == WM_MOUSEHWHEEL);
         return 0;
     }
-    case WM_SETCURSOR: {
-        // 档3：mb108 离屏模式不子类化窗口，内核的 fireWindowsMessage 对鼠标零 DOM 输出。
-        // cursor 值已在 WM_APP+3 的 hover move 里同步到 browser->cursorType，这里直接设光标。
-        // 只在客户区（HTCLIENT）设光标，非客户区交给 DefWindowProc 画标准箭头。
-        if (LOWORD(lParam) == 1 /* HTCLIENT */) {
-            const int ct = browser->cursorType.load();
-            HCURSOR h = nullptr;
-            if (ct == 1)      h = LoadCursorA(nullptr, IDC_HAND);
-            else if (ct == 2) h = LoadCursorA(nullptr, IDC_IBEAM);
-            else              h = LoadCursorA(nullptr, IDC_ARROW);
-            if (h) { SetCursor(h); return TRUE; }
-        }
+    case WM_SETCURSOR:
+        // 上屏模式：光标由内核原生管理（页面 CSS cursor 直接生效），交给默认过程。
         break;
-    }
+    case WM_TIMER:
+        // 页面侧定时器兜底在某些页面不派发（实测：桥经 mbRunJs 注入的脚本注册的
+        // setInterval 从不触发，页面自己的定时器却正常）。扫描是接管视频的前提，
+        // 所以由 native 用 Win32 定时器驱动：每秒调一次页面暴露的 __nmbIdleScan
+        // （见注入脚本 armTimers），它内部再驱动 syncAll。mbRunJs 通道已被
+        // hover polyfill 长期验证是活的。
+        if (wParam == 1 && view && g_kernel.runJsByFrame && g_kernel.getMainFrame) {
+            Frame frame = g_kernel.getMainFrame(view);
+            if (frame) g_kernel.runJsByFrame(view, frame, "window.__nmbIdleScan&&window.__nmbIdleScan();", 0, nullptr, nullptr, nullptr);
+        }
+        return 0;
     default:
         break;
     }
@@ -310,6 +241,8 @@ HWND createKernelWindow(int width, int height) {
 
 void destroyBrowser(Browser* browser) {
     if (!browser) return;
+    // 停掉 native 驱动的页面扫描定时器（见 browserWindowProc 的 WM_TIMER）。
+    if (browser->hwnd) KillTimer(browser->hwnd, 1);
     // 合成缓冲归浏览器所有（不跟着媒体走）：DC 要先换回自带的单色位图才能删。
     if (browser->paintDC) {
         if (browser->paintOriginal) SelectObject(browser->paintDC, browser->paintOriginal);
@@ -331,12 +264,6 @@ void destroyBrowser(Browser* browser) {
     }
     releaseAllMedia(browser);
     if (browser->view && g_kernel.destroyWebView) { g_kernel.destroyWebView(browser->view); browser->view = nullptr; }
-    // 先销毁 view，让内核不再持有工具窗；再销毁工具窗本身。
-    if (browser->kernelHwnd) {
-        RemovePropW(browser->kernelHwnd, L"NMB_KERNEL");
-        DestroyWindow(browser->kernelHwnd);
-        browser->kernelHwnd = nullptr;
-    }
     if (browser->hwnd) {
         RemovePropW(browser->hwnd, L"NMB_BROWSER");
         DestroyWindow(browser->hwnd);

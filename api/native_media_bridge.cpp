@@ -22,8 +22,8 @@ int NMB_CALL NMB_Initialize(const wchar_t* miniblinkDll, const wchar_t*) {
 }
 NMB_HANDLE NMB_CALL NMB_CreateBrowser(HWND parent, int x, int y, int width, int height) {
     if (!g_kernel.module) { setError(L"请先调用 NMB_Initialize"); return nullptr; }
-    if (!g_kernel.createWebView || !g_kernel.setHandle || !g_kernel.getViewDC) {
-        setError(L"当前 miniblink 内核缺少离屏渲染接口 (mbCreateWebView/mbSetHandle/mbGetLockedViewDC)");
+    if (!g_kernel.createWebView || !g_kernel.setHandle) {
+        setError(L"当前 miniblink 内核缺少窗口渲染接口 (mbCreateWebView/mbSetHandle)");
         return nullptr;
     }
     if (width < 1) width = 800;
@@ -53,53 +53,28 @@ NMB_HANDLE NMB_CALL NMB_CreateBrowser(HWND parent, int x, int y, int width, int 
         return nullptr;
     }
     SetPropW(browser->hwnd, L"NMB_BROWSER", browser);
-    // 最终路径（mb108）：不能不给 HWND（会杀页），也不能绑定可见窗（内核直绘会盖掉合成视频而闪烁）。
-    // 给它同尺寸但永不显示的工具窗；真实可见窗仍只由 paintBrowser 从 getViewDC 合成后一次上屏。
-    // NMB_KERNEL_HOST_WINDOW=1 仅保留为取证开关：强制绑定可见窗，复现双绘制者闪烁。
-    if (!kernelHostWindowEnabled()) {
-        browser->kernelHwnd = createKernelWindow(width, height);
-        if (!browser->kernelHwnd) {
-            const DWORD code = GetLastError();
-            g_kernel.destroyWebView(browser->view);
-            browser->view = nullptr;
-            RemovePropW(browser->hwnd, L"NMB_BROWSER");
-            DestroyWindow(browser->hwnd);
-            browser->hwnd = nullptr;
-            browser->self.reset();
-            setError(L"创建内核绘制接收窗口失败，错误 " + std::to_wstring(code) + L": " + windowsError(code));
-            return nullptr;
-        }
-        g_kernel.setHandle(browser->view, browser->kernelHwnd);
-        // 标记这扇窗是"内核绑定窗"而非可视宿主：它的窗口过程要用它把
-        // CSS -webkit-app-region: drag 触发的 SC_MOVE 转投到可见顶层窗口。
-        SetPropW(browser->kernelHwnd, L"NMB_KERNEL", browser);
-    } else {
-        g_kernel.setHandle(browser->view, browser->hwnd);
-    }
-    // 有开关的内核（mb132+）本来也要显式关掉一次：交给窗口 ≠ 允许它自绘。
-    if (g_kernel.setAutoDrawToHwnd) g_kernel.setAutoDrawToHwnd(browser->view, 0);
+    // 上屏渲染模式：内核直接绑可见宿主窗自己画（mbSetHandle + mbSetAutoDrawToHwnd）。
+    // 离屏合成那条路（-32000 绑定窗 / getViewDC 拷贝 / paintBrowser 二次上屏）整体退役——
+    // hover 坐标错位、SC_MOVE 投错窗、双绘制者闪烁这些"绑定问题"从根上不存在了。
+    // 注意 mb108 三个已证事实里的①仍要遵守：绝不能不给 HWND（0.2s 抛 0xe06d7363）。
+    g_kernel.setHandle(browser->view, browser->hwnd);
+    // 内核自己上屏：mb132+ 有这个开关必须显式打开；mb108 没有（其 createWebView 本就直绘）。
+    if (g_kernel.setAutoDrawToHwnd) g_kernel.setAutoDrawToHwnd(browser->view, 1);
     if (g_kernel.setHandleOffset) g_kernel.setHandleOffset(browser->view, 0, 0);
     if (g_kernel.setTransparent) g_kernel.setTransparent(browser->view, false);
     // 页面内 target=_blank 之类的新窗口导航改为在当前视图内完成，避免弹出无人管理的窗口。
     if (g_kernel.setNavigationToNewWindowEnable) g_kernel.setNavigationToNewWindowEnable(browser->view, false);
     // 关闭 CSP 校验，保证注入脚本在任何页面上都能执行（否则跳转后媒体桥会失效）。
     if (g_kernel.setCspCheckEnable) g_kernel.setCspCheckEnable(browser->view, false);
-    if (g_kernel.onPaintUpdated) g_kernel.onPaintUpdated(browser->view, onWebViewPainted, browser->hwnd);
+    // 上屏模式不挂 onPaintUpdated：内核自己上屏，不需要"重绘通知→合成"那套链路。
+    // （onWebViewPainted 函数保留在 render/nmb_composite.cpp，随离屏代码一起退役备查。）
 
     RECT client{};
     GetClientRect(browser->hwnd, &client);
     const int clientWidth = client.right - client.left;
     const int clientHeight = client.bottom - client.top;
-    if (browser->kernelHwnd) SetWindowPos(browser->kernelHwnd, nullptr, -32000, -32000,
-                                           clientWidth, clientHeight, SWP_NOZORDER | SWP_NOACTIVATE);
     g_kernel.resize(browser->view, clientWidth, clientHeight);
     if (g_kernel.showWindow) g_kernel.showWindow(browser->view, true);
-    // mbShowWindow 会连带显示 view 绑定的 HWND；隐藏接收窗绝不能出现在 Z 序/命中测试里。
-    if (browser->kernelHwnd) {
-        ShowWindow(browser->kernelHwnd, SW_HIDE);
-        SetWindowPos(browser->kernelHwnd, HWND_BOTTOM, -32000, -32000, clientWidth, clientHeight,
-                     SWP_HIDEWINDOW | SWP_NOACTIVATE);
-    }
 
     if (g_kernel.onDocumentReady2) g_kernel.onDocumentReady2(browser->view,onReady,browser);
     // 页面带远程媒体时 mbOnDocumentReady 可能迟迟不来（注入就永远落不下去），
@@ -123,6 +98,9 @@ NMB_HANDLE NMB_CALL NMB_CreateBrowser(HWND parent, int x, int y, int width, int 
         fprintf(stderr, "[nmb] LUB attached\n");
     }
     { std::lock_guard<std::mutex> lock(g_mutex); g_browsers.push_back(browser); }
+    // native 驱动的页面扫描兜底（见 browserWindowProc 的 WM_TIMER）：页面侧定时器
+    // 在部分页面上不派发，扫描又是媒体接管的前提，由 Win32 定时器每秒拉一次。
+    if (browser->hwnd) SetTimer(browser->hwnd, 1, 1000, nullptr);
     ShowWindow(browser->hwnd, SW_SHOW);
     UpdateWindow(browser->hwnd);
     return browser;
@@ -174,8 +152,6 @@ void NMB_CALL NMB_Resize(NMB_HANDLE value,int w,int h){
         GetClientRect(b->hwnd,&client);
         const int clientWidth=client.right-client.left;
         const int clientHeight=client.bottom-client.top;
-        if (b->kernelHwnd) SetWindowPos(b->kernelHwnd,nullptr,-32000,-32000,clientWidth,clientHeight,
-                                        SWP_NOZORDER|SWP_NOACTIVATE);
         g_kernel.resize(b->view,clientWidth,clientHeight);
         if (g_kernel.wake) g_kernel.wake(b->view);
         InvalidateRect(b->hwnd,nullptr,FALSE);
@@ -188,12 +164,6 @@ void NMB_CALL NMB_Show(NMB_HANDLE value,int show){
     if (!b) return;
     const BOOL visible = show != 0 ? TRUE : FALSE;
     if (b->view && g_kernel.showWindow) g_kernel.showWindow(b->view, visible != FALSE);
-    // 内核 show 操作的是绑定窗；它只负责接收直绘，任何时候都不能显示、激活或挡住可见窗。
-    if (b->kernelHwnd) {
-        ShowWindow(b->kernelHwnd, SW_HIDE);
-        SetWindowPos(b->kernelHwnd, HWND_BOTTOM, -32000, -32000, 0, 0,
-                     SWP_NOSIZE | SWP_HIDEWINDOW | SWP_NOACTIVATE);
-    }
     if (b->hwnd) {
         ShowWindow(b->hwnd, visible ? SW_SHOW : SW_HIDE);
         InvalidateRect(b->hwnd, nullptr, FALSE);

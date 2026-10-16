@@ -8,6 +8,63 @@
 #include "core/nmb_internal.h"
 
 namespace nmb {
+// 内部绘制模式：把一帧回传给页面。优先 MJPEG 编码（帧小、通道压力低）；
+// 静态 FFmpeg 没编编码器（build-ffmpeg-static.bat 只开了 decoder）时退回裸 BGRA
+// base64——一帧 480x270 约 0.7MB，通道能扛；页面侧按 mime 分流解码。
+static std::wstring frameJson(const std::vector<unsigned char>& bgra, int width, int height) {
+    const AVCodec* codec = avcodec_find_encoder(AV_CODEC_ID_MJPEG);
+    if (!codec) {
+        // 裸像素回退：BGRA 逐行、top-down，与帧缓冲一致。
+        const std::string b64 = base64Encode(bgra.data(), bgra.size());
+        return L"{\"ok\":true,\"w\":" + std::to_wstring(width) + L",\"h\":" + std::to_wstring(height) +
+               L",\"mime\":\"raw\",\"data\":\"" + std::wstring(b64.begin(), b64.end()) + L"\"}";
+    }
+    AVCodecContext* context = avcodec_alloc_context3(codec);
+    if (!context) return L"{\"ok\":false,\"noframe\":1}";
+    context->width = width;
+    context->height = height;
+    context->pix_fmt = AV_PIX_FMT_YUVJ420P;
+    context->time_base = AVRational{1, 25};
+    context->global_quality = 3;
+    context->qmin = 3;
+    context->qmax = 5;
+    std::vector<uint8_t> encoded;
+    bool opened = avcodec_open2(context, codec, nullptr) >= 0;
+    AVFrame* frame = nullptr;
+    SwsContext* scaler = nullptr;
+    if (opened) {
+        frame = av_frame_alloc();
+        if (frame) {
+            frame->format = AV_PIX_FMT_YUVJ420P;
+            frame->width = width;
+            frame->height = height;
+            if (av_frame_get_buffer(frame, 32) >= 0) {
+                const uint8_t* source[4] = {bgra.data(), nullptr, nullptr, nullptr};
+                int lines[4] = {width * 4, 0, 0, 0};
+                scaler = sws_getContext(width, height, AV_PIX_FMT_BGRA, width, height,
+                                        AV_PIX_FMT_YUVJ420P, SWS_BILINEAR, nullptr, nullptr, nullptr);
+                if (scaler && sws_scale(scaler, source, lines, 0, height, frame->data, frame->linesize) == height) {
+                    AVPacket* packet = av_packet_alloc();
+                    if (packet && avcodec_send_frame(context, frame) >= 0) {
+                        while (avcodec_receive_packet(context, packet) >= 0) {
+                            encoded.insert(encoded.end(), packet->data, packet->data + packet->size);
+                            av_packet_unref(packet);
+                        }
+                    }
+                    if (packet) av_packet_free(&packet);
+                }
+            }
+        }
+    }
+    if (scaler) sws_freeContext(scaler);
+    if (frame) av_frame_free(&frame);
+    avcodec_free_context(&context);
+    if (encoded.empty()) return L"{\"ok\":false,\"noframe\":1}";
+    const std::string b64 = base64Encode(encoded.data(), encoded.size());
+    return L"{\"ok\":true,\"w\":" + std::to_wstring(width) + L",\"h\":" + std::to_wstring(height) +
+           L",\"mime\":\"image/jpeg\",\"data\":\"" + std::wstring(b64.begin(), b64.end()) + L"\"}";
+}
+
 // 单个页面同时交给原生解码的媒体路数上限：视频路要占一路解码线程和一路音频线程，
 // 不设上限时"打开腾讯视频首页"这类页面会一次开出几十路，界面直接卡死。
 constexpr size_t kMaxActiveMedia = 6;
@@ -95,6 +152,32 @@ void __cdecl mediaBridge(WebView view, void* param, Exec exec, int64_t queryId, 
         respond(L"{\"ok\":true}");
         return;
     }
+    // 内部绘制模式（NMB_INTERNAL_DRAW=1）：页面里的 canvas 要一帧画面时经这里取。
+    // 只按 id 查表、拷一份帧出去，绝不动播放状态——取帧是"读"，不是控制。
+    if (op == L"frame") {
+        std::vector<unsigned char> pixels;
+        int width = 0, height = 0;
+        Media* found = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(browser->mutex);
+            auto it = browser->media.find(id);
+            found = (it != browser->media.end()) ? it->second : nullptr;
+            if (found) {
+                // 帧数据单独一把锁：编码（MJPEG）不能在 browser->mutex 与 frameMutex 之下做，
+                // 否则一帧的编码时间会把状态查询全堵住。
+                std::lock_guard<std::mutex> frameLock(found->frameMutex);
+                pixels = found->bgra;
+                width = found->frameWidth;
+                height = found->frameHeight;
+            }
+        }
+        if (!found || pixels.empty() || width <= 0 || height <= 0) {
+            respond(L"{\"ok\":false,\"noframe\":1}");
+            return;
+        }
+        respond(frameJson(pixels, width, height));
+        return;
+    }
     // 状态改动全程持锁；应答一定放到放锁之后再做——mbResponseQuery 会当场回调页面脚本，
     // 页面脚本有可能立刻再发一次查询进来，占着 browser->mutex 去应答就会把自己锁死。
     const std::wstring json = [&]() -> std::wstring {
@@ -168,10 +251,20 @@ void __cdecl mediaBridge(WebView view, void* param, Exec exec, int64_t queryId, 
                 if (media->openRunning) return L"{\"ok\":false,\"busy\":1,\"reason\":\"opening\"}";
                 if (!media->openOk && !media->openError.empty()) {
                     // Report once; the next open can retry instead of staying poisoned.
+                    // 顺带把 FFmpeg 的真实失败原因回给页面：只回 open-failed 时，
+                    // 页面侧永远看不出是源打不开、没有流，还是解码器初始化失败。
                     Media* failed = media;
+                    std::string reason = wideToUtf8(failed->openError);
                     browser->media.erase(id);
                     releaseMediaAsync(failed);
-                    return L"{\"ok\":false,\"error\":\"open-failed\"}";
+                    std::string escaped;
+                    escaped.reserve(reason.size() + 8);
+                    for (char c : reason) {
+                        if (c == '"' || c == '\\') { escaped.push_back('\\'); escaped.push_back(c); }
+                        else if (c == '\r' || c == '\n') escaped += ' ';
+                        else escaped.push_back(c);
+                    }
+                    return utf8ToWide("{\"ok\":false,\"error\":\"open-failed\",\"reason\":\"" + escaped + "\"}");
                 }
                 // 同一个地址被页面重新打开（站点重建播放器、src 重设成同一地址、用户点重试）：
                 // 条目是复用的，连带上一轮的熔断标志一起复用，页面这边拿了 ok:true 就去 adopt，

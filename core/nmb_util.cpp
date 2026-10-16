@@ -211,4 +211,23 @@ std::vector<uint8_t> base64Decode(const std::string& in) {
     return out;
 }
 
+// base64 编码：内部绘制模式把一帧 JPEG 字节回传给页面时用（页面侧 atob 解回 Uint8Array）。
+std::string base64Encode(const uint8_t* data, size_t size) {
+    static const char table[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    out.reserve((size + 2) / 3 * 4);
+    for (size_t i = 0; i < size; i += 3) {
+        const size_t left = size - i;
+        const uint32_t chunk = (static_cast<uint32_t>(data[i]) << 16) |
+                               (left > 1 ? (static_cast<uint32_t>(data[i + 1]) << 8) : 0u) |
+                               (left > 2 ? static_cast<uint32_t>(data[i + 2]) : 0u);
+        out.push_back(table[(chunk >> 18) & 0x3F]);
+        out.push_back(table[(chunk >> 12) & 0x3F]);
+        out.push_back(left > 1 ? table[(chunk >> 6) & 0x3F] : '=');
+        out.push_back(left > 2 ? table[chunk & 0x3F] : '=');
+    }
+    return out;
+}
+
 } // namespace nmb

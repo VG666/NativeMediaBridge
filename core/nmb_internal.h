@@ -170,6 +170,7 @@ std::string wideToUtf8(const std::wstring& value);
 std::wstring ffmpegError(int code);
 std::string ffmpegSource(const std::wstring& source);
 std::vector<uint8_t> base64Decode(const std::string& in);
+std::string base64Encode(const uint8_t* data, size_t size);
 std::vector<std::wstring> splitFields(const std::wstring& request);
 std::wstring field(const std::vector<std::wstring>& fields, size_t index);
 double number(const std::wstring& text, double fallback = 0);
@@ -235,6 +236,9 @@ std::wstring mediaStateJson(Media* media);
 void __cdecl onReady(WebView view, void* param, Frame frame);
 void __cdecl onScriptContext(WebView view, void* param, Frame frame, void* context, int extensionGroup, int worldId);
 bool mediaBridgeDisabled();
+// 内部绘制模式（NMB_INTERNAL_DRAW=1）：视频帧不再由本桥用 GDI 叠在离屏页面位图上
+// （浏览器外部画），而是交给页面里的 canvas，由内核在 DOM 内部绘制。旧行为是默认。
+bool internalDrawEnabled();
 
 // ── nmb_protocol.cpp ──
 // 一次写齐 rect/barRect/clipRect（挖洞直接用上报的 barRect，画面裁剪直接用上报的 clipRect，

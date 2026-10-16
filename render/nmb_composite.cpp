@@ -149,6 +149,10 @@ void paintBrowser(Browser* browser, HDC dc, const RECT& target) {
     };
     {
         std::lock_guard<std::mutex> lock(browser->mutex);
+        // 内部绘制模式（NMB_INTERNAL_DRAW=1）：画面由页面里的 canvas 在 DOM 内部绘制，
+        // 这里不再把 FFmpeg 帧叠到离屏页面位图上（那等于在浏览器外部画，会盖住 DOM 覆盖物、
+        // 也不参与页面命中测试）。页面像素原样上屏即可。
+        if (!internalDrawEnabled())
         for (const auto& item : browser->media) {
             Media* media = item.second;
             if (!media || media->kind != L"video") continue;
