@@ -324,11 +324,17 @@ var NMB_CSS=[
 '   CSS.supports(\'display\',\'grid\') 为 false，写了 display:grid 计算出来仍是 block，',
 '   同格叠放全部静默失效，条会被挤到元素盒子**下面**去。2026-09-18 实测，六种写法全量',
 '   对比见 tests/testjs/_nmb_flow_feat.html（唯一在流内叠放成功的是负 margin）。 */',
+'/* 【不要给包装盒试 shrink-to-fit】width:fit-content 本内核（Chromium 60）不认，',
+'   @supports not(width:fit-content){display:table} 兜底会让包装盒按内容固有宽度收缩',
+'   （944 宽的 video 缩到 300），wrapEl 末尾的逐像素保险当场判"包装改写了布局"并拆包，',
+'   结果是**所有视频/音频都没有控件条**（2026-10-20 实测：bars=0，元素 hooked 但 wants=false）。',
+'   wrapEl 的保险必须留着（它防的是站点 >video 子选择器、flex 拉伸等真实改写），',
+'   所以包装盒宽度只能跟着父容器走；"窄元素上的条过宽"另想办法，不要动这里。 */',
 '[data-nmb-wrap]{position:relative;line-height:0}',
 '/* 行内媒体的"行内身份"由 wrapEl 打 data-nmb-inline 属性传来，具体 display 值在这里定',
 '   （脚本不再写 display：布局值归样式表，这是用户明确口径）。是 inline-block 而不是',
 '   inline-grid——理由同上，本内核没有 grid。 */',
-'[data-nmb-wrap][data-nmb-inline="1"]{display:inline-block}',
+'[data-nmb-wrap][data-nmb-inline="1"]{display:inline-block;vertical-align:top}',
 '/* 包装盒里元素自身的"盒外表现"已由 wrapEl 搬到包装盒上（margin/vertical-align），',
 '   这里清零元素自己的，防止双重 margin 把元素推离包装盒边缘、条不再贴元素底。',
 '   站点 !important margin 清不掉时，wrapEl 的逐像素保险会抓到并当场拆包。 */',
@@ -369,6 +375,25 @@ var NMB_CSS=[
 '   data-nmb-fshide= fsSyncBars 的"全屏的是别的元素"。分开写，谁也覆盖不掉谁。 */',
 '[data-nmb-controls][data-nmb-off="1"],',
 '[data-nmb-controls][data-nmb-fshide="1"]{display:none!important}',
+'',
+'/* 控件条自动隐藏（见 injection.js 的 syncAutoHide）。三个属性三条独立通道，互不覆盖：',
+'   data-nmb-off      placeBar：元素没露全/盒子没尺寸 → display:none；',
+'   data-nmb-fshide   fsSyncBars：全屏的是别的元素 → display:none；',
+'   data-nmb-autohide syncAutoHide：在播放且鼠标静止 → **只淡出，绝不动 display**。',
+'   分开的原因：placeBar 是"先把条藏了再量条"的，它靠 getBoundingClientRect 分档、',
+'   写 __nmbBarRect 给 native 挖洞。这里一旦用 display:none，量到的就是 0x0，',
+'   分档/挖洞/拖动全废——那正是"视频/音频播放条不显示"的老 bug。',
+'   淡出到 opacity:0 另有好处：collectHoles 按 computed opacity===\'0\' 跳过覆盖物，',
+'   条淡掉后 native 画面自动完整露出，不用额外通知。 */',
+'[data-nmb-controls]{',
+'	opacity:1;',
+'	transition:opacity .18s linear;',
+'}',
+'[data-nmb-controls][data-nmb-autohide="1"]{',
+'	opacity:0;',
+'	/* 淡掉之后别挡住底下元素：条虽然看不见，仍在原处，挡点击就是幽灵控件。 */',
+'	pointer-events:none;',
+'}',
 '/* 原生控件被藏掉后 <audio> 自身高度会塌成 0，条跟着"露不出来"整条消失：给个下限。',
 '   值就是条的自然高度；原来由 placeBar 观察到塌陷后写内联 min-height，现在写在样式表里。 */',
 '[data-native-media]{min-height:38px}',
@@ -407,12 +432,16 @@ var NMB_CSS=[
 '	padding:0;border:0;background:transparent;color:#fff;cursor:pointer;',
 '}',
 '[data-nmb-controls] [data-nmb-play]{width:26px;height:26px}',
-'[data-nmb-controls] [data-nmb-fs]{padding:2px 4px;font-size:14px}',
+'[data-nmb-controls] [data-nmb-fs]{width:26px;height:26px}',
 '',
 '/* 记号：按钮里唯一那个 <i>，纯 CSS 图形（三角=播放，双竖条=暂停）。',
 '   不能用 SVG（内核 SVG 支持不牢，会整块画不出来只剩空框）。',
 '   syncBar 只切 class：nmb-mark-play / nmb-mark-pause，形状别写回 JS。 */',
-'[data-nmb-controls] i.nmb-mark{display:block;padding:0;border:0 solid transparent;background:currentColor}',
+'/* 底色必须 transparent（2026-10-20 修 "播放键是个白方块"）：背景色默认按 border-box',
+'   填充，而播放三角正是靠 border 画的——底色一铺就把整个三角填成实心方块',
+'   （用户截到的就是这个白方块）。探针实测：同样的 border 三角只把背景改成',
+'   transparent 立刻恢复正常。 */',
+'[data-nmb-controls] i.nmb-mark{display:block;padding:0;border:0 solid transparent;background:transparent}',
 '[data-nmb-controls] i.nmb-mark-play{',
 '	width:0;height:0;margin-left:3px;',
 '	border-left:10px solid currentColor;border-top:6px solid transparent;border-bottom:6px solid transparent;',
@@ -420,9 +449,21 @@ var NMB_CSS=[
 '[data-nmb-controls] i.nmb-mark-pause{',
 '	width:11px;height:12px;',
 '	/* 双竖条同样不能用 "颜色 起 止" 的双位置断点（CSS Images 4 要 Chrome 71+；内核是 Chromium 60',
-'	   时整条渐变作废，记号只剩基础规则的实心方块）。每段两端各写一个断点，老内核才认。 */',
-'	background:linear-gradient(90deg,currentColor 0%,currentColor 36%,transparent 36%,transparent 64%,currentColor 64%,currentColor 100%);',
+)NMBHOOK"
+R"NMBHOOK('	   时整条渐变作废，记号只剩基础规则的实心方块）。每段两端各写一个断点，老内核才认。 */',
+'	background-color:transparent;',
+'	background-image:linear-gradient(90deg,currentColor 0%,currentColor 36%,transparent 36%,transparent 64%,currentColor 64%,currentColor 100%);',
 '}',
+'/* 全屏记号：两个伪元素画左上/右下 L 形括号。原来按钮里直接写字符 "⛶"，但内核的字体',
+'   没有这个字形（实测 ⛶ ◱ ⤢ ⇱ 全是空心豆腐块），只能用 CSS 画。',
+'   clip-path 在这版内核里完全无效（computed 仍是 none，见 _probe_icon2），border 才靠得住。 */',
+'[data-nmb-controls] i.nmb-mark-fs{position:relative;width:16px;height:16px}',
+'[data-nmb-controls] i.nmb-mark-fs::before,',
+'[data-nmb-controls] i.nmb-mark-fs::after{',
+'	content:\'\';display:block;position:absolute;width:7px;height:7px;box-sizing:border-box;',
+'}',
+'[data-nmb-controls] i.nmb-mark-fs::before{left:0;top:0;border-left:2px solid currentColor;border-top:2px solid currentColor}',
+'[data-nmb-controls] i.nmb-mark-fs::after{right:0;bottom:0;border-right:2px solid currentColor;border-bottom:2px solid currentColor}',
 '',
 '/* 时间：定宽，数字跳变时布局不抖 */',
 '[data-nmb-controls] [data-nmb-cur],[data-nmb-controls] [data-nmb-total]{min-width:40px;font-family:Arial,sans-serif;font-size:12px}',
@@ -444,8 +485,7 @@ var NMB_CSS=[
 '.nmb-seek{-webkit-appearance:none;appearance:none;background:transparent;height:14px}',
 '.nmb-seek:focus{outline:none}',
 '.nmb-seek::-webkit-slider-runnable-track{height:4px;border-radius:2px;background:rgba(255,255,255,.16)}',
-)NMBHOOK"
-R"NMBHOOK('.nmb-seek::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;margin-top:-4px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.5)}',
+'.nmb-seek::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;margin-top:-4px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.5)}',
 '.nmb-seek::-moz-range-track{height:4px;border-radius:2px;background:rgba(255,255,255,.16)}',
 '.nmb-seek::-moz-range-thumb{width:12px;height:12px;border:0;border-radius:50%;background:#fff}',
 '',
@@ -478,10 +518,14 @@ R"NMBHOOK('.nmb-seek::-webkit-slider-thumb{-webkit-appearance:none;width:12px;he
 '/* 窄：收掉音量 */',
 '[data-nmb-controls][data-nmb-narrow="1"] [data-nmb-vol]{display:none}',
 '',
-'/* 极窄：音量与总时长都收掉，进度条给个更小的下限 */',
+'/* 极窄：音量与总时长都收掉，进度条给个更小的下限，时间文本收窄，gap 收紧——',
+'   min-width:56 + 时间40 + 播放26 + gap/padding 时内容 ~190px，条比这还窄就整体',
+'   溢出、被条的 overflow:hidden 截掉（视觉=条"消失"）。收到 ~120px 可排下。 */',
 '[data-nmb-controls][data-nmb-tiny="1"] [data-nmb-vol],',
 '[data-nmb-controls][data-nmb-tiny="1"] [data-nmb-total]{display:none}',
-'[data-nmb-controls][data-nmb-tiny="1"] [data-nmb-seek]{min-width:56px}',
+'[data-nmb-controls][data-nmb-tiny="1"] [data-nmb-seek]{min-width:36px}',
+'[data-nmb-controls][data-nmb-tiny="1"] [data-nmb-cur]{min-width:30px}',
+'[data-nmb-controls][data-nmb-tiny="1"]{gap:5px;padding:5px 8px}',
 '/* 控件条样式表 · 音频条',
 '',
 '   <audio> 没有画面，控件条就是这个组件本身，所以比视频那套更紧凑，',
@@ -630,7 +674,17 @@ R"NMBHOOK('.nmb-seek::-webkit-slider-thumb{-webkit-appearance:none;width:12px;he
       var nat=bar.__nmbNatH;
       var wrap=el.__nmbWrap;
       var fsEl=document.fullscreenElement;
-      var inWrap=!!wrap&&boxEq(wrap,r);
+      // "元素还在包装盒里"从逐像素相等改为覆盖判定：wrap 矩形罩得住元素矩形（1px 容差）
+)NMBHOOK"
+R"NMBHOOK(      // 即算 in。逐像素相等在窗口缩放/套盒/拆盒的舍入瞬间失配，placeBar 当场判 off 把整条
+      // display:none——小尺寸元素上就是"条不正常消失"（boxEq 那种 1px 内全等在小盒子上
+      // 极易被舍入打破）。真正要防的只是"站点把元素挪出了包装盒"（元素不再被 wrap 罩住）。
+      var inWrap=false;
+      if(wrap){
+        var wb=wrap.getBoundingClientRect();
+        inWrap=Math.abs(wb.left-r.left)<1&&Math.abs(wb.top-r.top)<1&&
+               wb.width+2>=r.width&&wb.height+2>=r.height;
+      }
       var selfFs=!!fsEl&&(fsEl===el||(fsEl.contains&&fsEl.contains(el)))||!!(el.hasAttribute&&el.hasAttribute('data-nmb-fs'));
       var fsbar=!inWrap&&selfFs;
       // 条在包装盒与文档根之间搬（仅全屏进出会触发）：位置两侧都是纯 CSS，搬的只是父子关系。
@@ -669,8 +723,7 @@ R"NMBHOOK('.nmb-seek::-webkit-slider-thumb{-webkit-appearance:none;width:12px;he
       //（236 行 if(!bar)return），把 clip 绑在条上会让拆包元素的 clip 永远缺省、
       // native 按"完全不可见"把画面也砍掉。权威写入点在 syncAll（算 ckey 的地方），
       // 每次几何变化都会覆盖，有条无条都跑。
-)NMBHOOK"
-R"NMBHOOK(      // 16px 以下连一个播放键都塞不下，画出来只会是一坨挤坏的残条，不如不画。
+      // 16px 以下连一个播放键都塞不下，画出来只会是一坨挤坏的残条，不如不画。
       if(r.height<16)off=1;
       // 显隐只打属性，怎么显示在样式表里（[data-nmb-controls][data-nmb-off="1"]）。
       if(off){
@@ -719,8 +772,12 @@ R"NMBHOOK(      // 16px 以下连一个播放键都塞不下，画出来只会�
         if(cs){
           var d=cs.display;
           if(d&&d.indexOf('inline')===0)wrap.setAttribute('data-nmb-inline','1');
-          var mv=['margin-top','margin-right','margin-bottom','margin-left','vertical-align'];
+          var mv=['margin-top','margin-right','margin-bottom','margin-left'];
           for(var i=0;i<mv.length;i++){var v=cs.getPropertyValue(mv[i]);if(v)wrap.style.setProperty(mv[i],v)}
+          // vertical-align 只在元素**显式**给了非 baseline 值时才搬：搬 baseline 会让包装盒
+          // （inline-block）按"底部基线对齐"落进行盒，元素被整体往下推 9px（实测 400x225 的
+          // video 就是这个数），wrapEl 的逐像素保险当场判布局被改写、拆包——结果是普通页面
+          // 上**所有**视频都没有控件条。包装盒自己的对齐值归样式表（base.css 里是 top）。
         }
       }catch(e){}
       try{el.parentNode.insertBefore(wrap,el);wrap.appendChild(el)}catch(e){return null}
@@ -775,7 +832,10 @@ R"NMBHOOK(      // 16px 以下连一个播放键都塞不下，画出来只会�
       // 宽度分档（placeBar 的 tier 写 data-nmb-narrow/data-nmb-tiny）与各控件尺寸都靠这些标记认控件。
       cur.setAttribute('data-nmb-cur','1');seek.setAttribute('data-nmb-seek','1');total.setAttribute('data-nmb-total','1');vol.setAttribute('data-nmb-vol','1');
       var fs=null;
-      if(!audio){fs=doc.createElement('button');fs.type='button';fs.textContent='⛶';fs.setAttribute('aria-label','全屏');fs.setAttribute('data-nmb-fs','1')}
+      // 全屏记号用 <i class="nmb-mark nmb-mark-fs"> 画 CSS 括号，不写字符：'⛶' 这版内核的字体里
+      // 没有字形，渲染出来是空心豆腐块（实测见 _probe_icon2/icon3）。
+      if(!audio){fs=doc.createElement('button');fs.type='button';fs.setAttribute('aria-label','全屏');fs.setAttribute('data-nmb-fs','1');
+        var fsm=doc.createElement('i');fsm.className='nmb-mark nmb-mark-fs';fs.appendChild(fsm)}
       btn.onclick=function(){if(st(el).paused){el.play()}else{el.pause()}};
       // 音频不建全屏按钮：没有画面，全屏没有意义。注意按钮上的 data-nmb-fs 只是"这是全屏按钮"的
       // 记号，与全屏**状态**属性同名——状态选择器必须写成 [data-nmb-wrap][data-nmb-fs="1"]（见
@@ -815,7 +875,8 @@ R"NMBHOOK(      // 16px 以下连一个播放键都塞不下，画出来只会�
       // 鼠标在条外松开（拖出控件条再松手）时元素收不到 mouseup，靠这条兜底解除，否则滑块会永久锁死。
       seek.addEventListener('mouseleave',function(){if(seek.__busy)dragEnd()});
       vol.addEventListener('input',function(){el.volume=Number(vol.value)/100});
-      bar.appendChild(btn);bar.appendChild(cur);bar.appendChild(seek);bar.appendChild(total);bar.appendChild(vol);if(fs)bar.appendChild(fs);
+)NMBHOOK"
+R"NMBHOOK(      bar.appendChild(btn);bar.appendChild(cur);bar.appendChild(seek);bar.appendChild(total);bar.appendChild(vol);if(fs)bar.appendChild(fs);
       // 条与元素一起进桥的包装盒（wrapEl）：条由 CSS 相对布局贴盒底，一个坐标都不写。
       // 包装被布局保险退回（wrapEl 返回 null）就不要条——native 画面照常，宁缺毋滥。
       var wrap=el.__nmbWrap||wrapEl(el);
@@ -823,6 +884,14 @@ R"NMBHOOK(      // 16px 以下连一个播放键都塞不下，画出来只会�
       el.__nmbWrap=wrap;
       wrap.appendChild(bar);
       el.__nmbBar=bar;
+      // 自动隐藏每帧只读这几样：条上是否有鼠标、进度滑块是否在拖、条里是否有焦点。
+      // 都挂在条自己身上，避免每帧再 querySelector 一遍。
+      bar.__nmbSeek=seek;bar.__nmbHover=0;
+      bar.addEventListener('mouseenter',function(){bar.__nmbHover=1;lastAct=Date.now()});
+      bar.addEventListener('mouseleave',function(){bar.__nmbHover=0;lastAct=Date.now()});
+      bar.addEventListener('focusin',function(){lastAct=Date.now()});
+      // 新建的条先亮一会儿再谈隐藏。
+      lastAct=Date.now();
       el.__nmbWantsBar=true;
       placeBar(el);
       return bar;
@@ -834,8 +903,14 @@ R"NMBHOOK(      // 16px 以下连一个播放键都塞不下，画出来只会�
       // 这一句又把"每帧无条件重写 left/top/width/height/display"补回来了，等于白算一次样式、白失效一次布局。
       // 摆条只该发生在两处：buildBar（建条时一次）和 syncAll（rect 或视口变了才一次）。这里不再碰位置。
       var s=st(el);
-      var btn=bar.firstChild;
-      var cur=btn.nextSibling,seek=cur.nextSibling,total=seek.nextSibling,vol=total.nextSibling;
+      // 控件按 data-* 身份取，不按子节点顺序：条内 DOM 被站点脚本动过（插入/重排）后，
+      // 按顺序解构拿到的是别的东西，下面 btn.__nmbMark.className 会炸断 syncBar，
+      // 进度/时间/显隐从此不再更新（表现为控件"卡死/不显示"）。
+      var btn=bar.querySelector('[data-nmb-play]')||bar.firstChild;
+      var cur=bar.querySelector('[data-nmb-cur]'),seek=bar.querySelector('[data-nmb-seek]'),
+          total=bar.querySelector('[data-nmb-total]'),vol=bar.querySelector('[data-nmb-vol]');
+      if(!btn||!cur||!seek||!total||!vol)return;
+      if(!btn.__nmbMark){var mk=bar.ownerDocument.createElement('i');mk.className='nmb-mark nmb-mark-play';btn.appendChild(mk);btn.__nmbMark=mk}
       var paused=!!s.paused;
       // 只在状态真的翻转时才改记号：syncAll 是每帧跑的，每帧写一次样式纯属白烧 CPU。
       if(btn.__nmbPaused!==paused){
@@ -876,8 +951,7 @@ R"NMBHOOK(      // 16px 以下连一个播放键都塞不下，画出来只会�
       // 和上面同一条规矩：秒数一秒才动一次、总时长与音量基本不变，所以先比再写。
       var curTxt=fmtTime(shown);
       if(cur.__nmbTxt!==curTxt){cur.__nmbTxt=curTxt;cur.textContent=curTxt}
-)NMBHOOK"
-R"NMBHOOK(      var totTxt=s.duration>0?fmtTime(s.duration):'--:--';
+      var totTxt=s.duration>0?fmtTime(s.duration):'--:--';
       if(total.__nmbTxt!==totTxt){total.__nmbTxt=totTxt;total.textContent=totTxt}
       var volN=el.muted?0:Math.round((el.volume==null?1:el.volume)*100);
       var volV=String(volN);
@@ -996,6 +1070,10 @@ R"NMBHOOK(      var totTxt=s.duration>0?fmtTime(s.duration):'--:--';
         el.__nmbCanvas=cv;el.__nmbCtx=cv.getContext('2d');
         // 取帧循环：按浏览器的刷新节奏走，解码那边没新帧就什么也不做。
         var last='';var busy=false;
+        // pump 暴露给 idleScan（native WM_TIMER 驱动）：注入世界的 rAF/interval
+        // 不保证派发（实测页面定时器活、注入定时器死），native 每次扫描顺带拉一帧，
+        // 否则 canvas 一直是黑的第一帧都没有。
+        el.__nmbPump=function(){try{pump()}catch(e){}};
         function pump(){
           if(!el.__nmbCanvas||!attached(el))return;
           if(!busy){
@@ -1008,7 +1086,8 @@ R"NMBHOOK(      var totTxt=s.duration>0?fmtTime(s.duration):'--:--';
                 // 同一帧不重复解码：连续几帧没有新画面时省掉整条解码。
                 if(data.data===last)return;
                 last=data.data;
-                var c=el2.__nmbCanvas,ctx=el2.__nmbCtx;
+)NMBHOOK"
+R"NMBHOOK(                var c=el2.__nmbCanvas,ctx=el2.__nmbCtx;
                 if(!c||!ctx)return;
                 if(data.mime==='raw'){
                   // 裸 BGRA：atob 回字节、按行塞进 ImageData 交 putImageData。
@@ -1068,7 +1147,7 @@ R"NMBHOOK(      var totTxt=s.duration>0?fmtTime(s.duration):'--:--';
         if(el.__nmbFitTimer){clearInterval(el.__nmbFitTimer);el.__nmbFitTimer=null}
         if(el.__nmbCanvas&&el.__nmbCanvas.parentNode)el.__nmbCanvas.parentNode.removeChild(el.__nmbCanvas);
       }catch(e){}
-      el.__nmbCanvas=null;el.__nmbCtx=null;el.__nmbImg=null;
+      el.__nmbCanvas=null;el.__nmbCtx=null;el.__nmbImg=null;el.__nmbPump=null;
     }
     // 接管一个元素：先问原生解码器能不能打开，能打开才改写它的属性、隐藏原生控件并接管事件；
     // 打不开的元素一个属性都不改，原样交还给内核和站点。
@@ -1133,8 +1212,7 @@ R"NMBHOOK(      var totTxt=s.duration>0?fmtTime(s.duration):'--:--';
         if(generation!==el.__nmbGeneration)return;
         el.__nmbOpenGuard=null;el.__nmbGeneration++;retryOpen(el);
       },6000);
-)NMBHOOK"
-R"NMBHOOK(      // 接管前采样页面意图：此刻元素还是内核原生实现，读到的 el.paused/el.autoplay 是页面真正
+      // 接管前采样页面意图：此刻元素还是内核原生实现，读到的 el.paused/el.autoplay 是页面真正
       // 表达过的状态；adopt 之后 paused 变成桥的替身，就再也问不出来源意图了。
       // 只采一次（元素上后续还会反复进这里）。事件证据（见 sniff）比这次采样更晚、更准，别覆盖它。
       if(el.__nmbWantPlay===undefined)
@@ -1250,7 +1328,8 @@ R"NMBHOOK(      // 接管前采样页面意图：此刻元素还是内核原生�
     }
     // 用真实的时长/进度覆盖元素自身的属性，否则内核无法解复用时会话条无法拖动。
     function installOverrides(el){
-      if(el.__nmbPatched)return;el.__nmbPatched=true;
+)NMBHOOK"
+R"NMBHOOK(      if(el.__nmbPatched)return;el.__nmbPatched=true;
       defOn(el,'duration',function(){return st(this).duration});
       defOn(el,'currentTime',function(){return st(this).position},function(v){
         var el=this;if(!el.__nmbHooked)return;var t=Number(v)||0;if(!isFinite(t)||t<0)t=0;
@@ -1330,8 +1409,7 @@ R"NMBHOOK(      // 接管前采样页面意图：此刻元素还是内核原生�
       if(el.tagName==='AUDIO')return true;
       if(el.__nmbEverWanted||el.autoplay===true||(el.hasAttribute&&el.hasAttribute('autoplay')))return true;
       var r=el.getBoundingClientRect();
-)NMBHOOK"
-R"NMBHOOK(      if(r.width<16||r.height<16)return false;
+      if(r.width<16||r.height<16)return false;
       var cs=getComputedStyle(el);
       if(cs.display==='none'||cs.visibility!=='visible'||cs.opacity==='0')return false;
       // 不能用"是否在当前视口内"否决：多视频页里第二个视频常排在折叠下方（要滚动才可见），
@@ -1454,6 +1532,90 @@ R"NMBHOOK(      if(r.width<16||r.height<16)return false;
       }
       holeDirty=true;holeActiveUntil=Date.now()+500
     }
+    // ---------------------------- 控件条自动隐藏 ----------------------------
+    // 用户口径：播放时鼠标不动就把条淡掉，一动鼠标立刻回来。
+    // 三条硬约束，违反任意一条都会把"条不显示"那个老问题重新引回来：
+    //  ① 绝不用 display:none / 不碰 data-nmb-off。placeBar 是"先把条藏了再量条"
+    //    （data-nmb-off=1 → display:none → getBoundingClientRect 量到 0x0），复用这条通道
+    //    会让分档、__nmbBarRect、挖洞矩形全部失效。这里只改 opacity，几何照旧可量。
+    //  ② 计时不能靠注入世界的 setTimeout/setInterval：实测注入期注册的定时器整批作废
+    //    （见 armTimers 上的注释）。所以在 syncAll 里每帧比时间戳，时间戳由真实事件刷新。
+    //  ③ 淡出后 opacity 计算值必须是字符串 '0'：collectHoles 里按 opacity==='0' 跳过覆盖物，
+    //    条淡掉后就不再被挖洞，native 画面完整露出——这是白捡的好处，别写成 0.0x 破坏它。
+    var kAutoHideMs=2500;
+    // 暂停要持续这么久才把条重新亮出来（躲开片尾/循环回卷造成的瞬时 paused）。
+    var kPauseShowMs=600;
+    // 这些事件都算"用户动了"：内核从窗口外移回窗口内时一次 mousemove 都不发，只有 mouseenter。
+    var kMoveTypes='mousemove,pointermove,mouseover,pointerover,mouseenter,pointerenter';
+    var lastAct=Date.now();
+    // 上一次指针坐标：用来识别"同一坐标重复派发"的合成事件（见 noteAct）。
+    var lastPtX=-99999,lastPtY=-99999;
+    // 用户操作 → 刷新活动时间戳，并把"鼠标是否压在条上"当场重算一遍。
+    // 内核的指针事件有两个实测坑，只认 mousemove 会两头都慢半拍：
+    //  ① 把指针甩出窗口时不一定派发 mouseleave，只发一次 mouseout(relatedTarget=null)，
+    //    之后再也没有 mousemove —— mouseenter 置的 __nmbHover 就永远停在 1，条再也淡不下去。
+    //  ② 从窗口外移回窗口内时一次 mousemove 都不派发，只有 mouseover/mouseenter（实测
+    //    1500,1000 → 250,120 只得到 mouseenter）。
+    // 所以：指针类事件一律当作"用户动了"刷新时间戳；hover 真值取事件的坐标做矩形命中测试，
+    // 离场事件且没有 relatedTarget（= 离开整个窗口）时直接归 0。
+    function noteAct(event){
+      if(!event)return;
+      var t=event.type;
+      var isMove=kMoveTypes.indexOf(t)>=0;
+)NMBHOOK"
+R"NMBHOOK(      var isLeave=(t==='mouseout'||t==='mouseleave'||t==='pointerout'||t==='pointerleave');
+      if(!isMove&&!isLeave){lastAct=Date.now();return}
+      // 指针离开整个窗口（没有 relatedTarget）**不算用户操作**：内核会把同一个 mouseleave
+      // 在同一毫秒重复派发 3 次，又把窗口外的坐标当成一次"移动"，若照着刷新时间戳，
+      // 条会在该淡出的时候被反复叫醒，实测表现为"淡出慢一拍 + 亮一下又灭"的横跳。
+      if(isLeave&&!event.relatedTarget){
+        for(var j=0;j<hookedEls.length;j++){
+          var lj=hookedEls[j].__nmbBar;
+          if(lj)lj.__nmbHover=0;
+        }
+        return;
+      }
+      // 同一个坐标重复到达的指针事件不算"用户动了"：条淡出后 native 画面顶上来、
+      // 覆盖层出入都会让内核补发一批 mouseover/mouseout，坐标却没变；照着刷新时间戳
+      // 就会"亮一下又灭"地来回横跳（实测 6.7s 亮 0.1s 又灭）。真人动鼠标一定会改变坐标。
+      var x=event.clientX,y=event.clientY;
+      if(!isMove||x!==lastPtX||y!==lastPtY)lastAct=Date.now();
+      if(isMove){lastPtX=x;lastPtY=y}
+      for(var i=0;i<hookedEls.length;i++){
+        var b=hookedEls[i].__nmbBar;
+        if(!b)continue;
+        if(isLeave&&!event.relatedTarget){b.__nmbHover=0;continue}
+        if(!isMove)continue;
+        // 离场事件给的坐标已落在窗口外（实测 1502,1002），矩形命中自然判为不在条上。
+        var r=b.getBoundingClientRect();
+        b.__nmbHover=(x>=r.left&&x<=r.right&&y>=r.top&&y<=r.bottom)?1:0;
+      }
+    }
+    function syncAutoHide(el,now){
+      var bar=el.__nmbBar;
+      if(!bar)return;
+      var s=el.__nmbState;
+      var seek=bar.__nmbSeek;
+      // 播放到片尾/循环回卷时会有 1~2 个采样点读到 paused=true，若照着"暂停就显示"
+      // 处理，条会每隔几秒诡异地闪一下（实测 7.2s 亮、7.4s 又灭）。
+      // 所以暂停要持续 kPauseShowMs 才算真暂停；短暂停顿保持当前状态不变。
+      if(s&&s.paused===false){
+        bar.__nmbPausedAt=0;
+      }else{
+        if(!bar.__nmbPausedAt)bar.__nmbPausedAt=now;
+        if(now-bar.__nmbPausedAt<kPauseShowMs)return;
+      }
+      // 只有"确实在播"才隐藏：暂停、还没起来、状态没读到，一律保持常亮。
+      var hide=!!s&&s.paused===false&&!bar.__nmbHover&&
+               !(seek&&seek.__busy)&&!bar.contains(document.activeElement)&&
+               (now-lastAct>kAutoHideMs);
+      var want=hide?1:0;
+      if(bar.__nmbAH!==want){
+        bar.__nmbAH=want;
+        if(hide)bar.setAttribute('data-nmb-autohide','1');
+        else bar.removeAttribute('data-nmb-autohide');
+      }
+    }
 
     function syncAll(){
       if(fsElement&&(!attached(fsElement)||!attached(fsHost)||(fsPlaceholder&&!attached(fsPlaceholder))))fsExit();
@@ -1473,7 +1635,8 @@ R"NMBHOOK(      if(r.width<16||r.height<16)return false;
       var q=document.querySelectorAll('audio,video');
       for(var i=0;i<q.length;i++){
         var el=q[i];
-        window.__nmbScanCount=(window.__nmbScanCount||0)+1;
+        // 单元素同步失败不炸断整个扫描链：失败元素跳过本轮，下一轮再试。
+        try{
         var r=el.getBoundingClientRect();
         // 组件被隐藏（站点 display:none / 折叠面板 / 切走的 tab）时元素**还在 DOM 里**，
         // 所以 dropDetached 管不到它，可画面和控件条都已经没了——不管的话原生那一路会一直解码
@@ -1533,7 +1696,8 @@ R"NMBHOOK(      if(r.width<16||r.height<16)return false;
           }
         }
         if(!changed&&wantState)send(el,'state',null,null,true,r);
-        if(el.__nmbWantsBar)syncBar(el);
+        if(el.__nmbWantsBar){syncBar(el);syncAutoHide(el,now);}
+        }catch(e){}
       }
       holeDirty=false;
     }
@@ -1552,7 +1716,17 @@ R"NMBHOOK(      if(r.width<16||r.height<16)return false;
       setInterval(function(){try{syncAll()}catch(e){}},500);
       // native 驱动的兜底入口（WM_TIMER 经 mbRunJs 调用）：页面侧定时器世界
       // 在部分页面上整批不派发，这条通道已被 hover polyfill 长期验证是活的。
-      window.__nmbIdleScan=function(){try{syncAll()}catch(e){}};
+      window.__nmbIdleScan=function(){
+        try{syncAll()}catch(e){}
+        // 画面帧也走这条已验证活的 native 通道拉：取帧的 rAF/interval 在注入世界不可靠，
+        // canvas 长期黑屏（条正常、canvas 元素在、就是没像素）的根因就是没人调 pump。
+        try{
+          for(var k=0;k<hookedEls.length;k++){
+            var pk=hookedEls[k].__nmbPump;
+            if(pk)pk();
+          }
+        }catch(e){}
+      };
     }
     // 立即先装（早期上下文的定时器在部分页面上确实活着），DOMContentLoaded 再装一次；
     // 内核里 DOMContentLoaded 可能不触发（和 rAF 停摆同族），不能只押事件。
@@ -1569,6 +1743,14 @@ R"NMBHOOK(      if(r.width<16||r.height<16)return false;
     ['mousemove','mouseover','mouseout','pointerdown','click','focusin','focusout',
       'transitionrun','transitionend','animationstart','animationend','fullscreenchange']
       .forEach(function(type){document.addEventListener(type,markHoles,true)});
+    // 自动隐藏的"叫醒"监听单独挂一份：markHoles 也会被 syncLayout / MutationObserver 主动调用，
+    // 那些不是用户操作，混在一起会让条永远不淡出。只认真正的外设事件。
+    ['mousemove','pointermove','mouseover','pointerover','mouseenter','pointerenter',
+      'mouseout','mouseleave','pointerout','pointerleave',
+      'pointerdown','pointerup','mousedown','click','wheel',
+      'keydown','focusin','touchstart','touchmove'].forEach(function(type){
+      document.addEventListener(type,noteAct,true);
+    });
     scan(document);
     // 脚本上下文刚建立时 documentElement 可能还不存在；延迟安装且只装一次。
     function installMediaObserver(){
@@ -1579,8 +1761,7 @@ R"NMBHOOK(      if(r.width<16||r.height<16)return false;
       new MutationObserver(function(rs){
         clipVersion++;markHoles();
         for(var i=0;i<rs.length;i++)for(var j=0;j<rs[i].addedNodes.length;j++)scan(rs[i].addedNodes[j]);
-)NMBHOOK"
-R"NMBHOOK(      }).observe(root,{childList:true,subtree:true,attributes:true,attributeFilter:['class','style','hidden']});
+      }).observe(root,{childList:true,subtree:true,attributes:true,attributeFilter:['class','style','hidden']});
     }
     installMediaObserver();
     // 把当前文档标题回写到宿主窗口标题，宿主据此可以确认页面跳转是否真的发生。
@@ -1635,7 +1816,8 @@ R"NMBHOOK(      }).observe(root,{childList:true,subtree:true,attributes:true,att
       }else{
         e=new MouseEvent(type,{bubbles:true,cancelable:true,composed:true,view:window,clientX:X,
             clientY:Y,screenX:X,screenY:Y,button:0,buttons:0,relatedTarget:related||null});
-      }
+)NMBHOOK"
+R"NMBHOOK(      }
       el.dispatchEvent(e);
     }catch(e){}
   }

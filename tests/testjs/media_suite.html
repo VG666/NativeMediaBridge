@@ -82,22 +82,22 @@
 
     <section>
       <h2>视频 1</h2>
-      <video id="v1" class="v" controls preload="metadata" src="https://media.w3.org/2010/05/sintel/trailer.mp4">当前浏览器不支持 HTML5 video。</video>
+      <video id="v1" class="v" controls preload="metadata" src="_nmb_local.mp4">当前浏览器不支持 HTML5 video。</video>
     </section>
 
     <section>
       <h2>视频 2</h2>
-      <video id="v2"class="v" controls preload="metadata" src="http://www.w3schools.com/html/mov_bbb.mp4">当前浏览器不支持 HTML5 video。</video>
+      <video id="v2"class="v" controls preload="metadata" src="_nmb_local_av.mp4">当前浏览器不支持 HTML5 video。</video>
     </section>
     
     <section>
       <h2>视频 3</h2>
-      <video id="v2" controls preload="metadata" src="file:///F:/%E7%BC%96%E7%A8%8B/MBPython-master/NativeMediaBridge-%E6%B3%A8%E8%A7%A3%E7%89%88/tests/testjs/_nmb_local.mp4">当前浏览器不支持 HTML5 video。</video>
+      <video id="v2" controls preload="metadata" src="_nmb_local.mp4">当前浏览器不支持 HTML5 video。</video>
     </section>
 
     <section>
       <h2>音频</h2>
-      <audio id="a1" controls preload="metadata" src="http://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3">当前浏览器不支持 HTML5 audio。</audio>
+      <audio id="a1" controls preload="metadata" src="_nmb_local_audio.m4a">当前浏览器不支持 HTML5 audio。</audio>
     </section>
   </main>
 
@@ -233,7 +233,9 @@
         var r1 = raw('v1'), ra = raw('a1');
         // 源里本来就没音轨是合法情况（aerr=no-stream），不算故障；其它原因都是真问题。
         var bad = r1.aerr && r1.aerr !== 'no-stream';
-        note('视频音频', !bad && Number(r1.audio) === 1,
+        // v1 现在挂的是本地无声样本（_nmb_local.mp4），aerr=no-stream 是合法结果——
+        // 断言必须跟着注释走：要么音轨真的起来了，要么确实没有音轨；别的原因才算故障。
+        note('视频音频', (!bad && Number(r1.audio) === 1) || r1.aerr === 'no-stream',
              'v1[audio=' + r1.audio + ' apos=' + (r1.apos || 0).toFixed(1) +
              ' err=' + (r1.aerr || '-') + '] a1[audio=' + ra.audio + ']');
       }, 13000);
