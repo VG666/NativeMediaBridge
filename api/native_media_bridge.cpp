@@ -100,7 +100,7 @@ NMB_HANDLE NMB_CALL NMB_CreateBrowser(HWND parent, int x, int y, int width, int 
     { std::lock_guard<std::mutex> lock(g_mutex); g_browsers.push_back(browser); }
     // native 驱动的页面扫描兜底（见 browserWindowProc 的 WM_TIMER）：页面侧定时器
     // 在部分页面上不派发，扫描又是媒体接管的前提，由 Win32 定时器每秒拉一次。
-    if (browser->hwnd) SetTimer(browser->hwnd, 1, 1000, nullptr);
+    if (browser->hwnd) SetTimer(browser->hwnd, 1, 200, nullptr);
     ShowWindow(browser->hwnd, SW_SHOW);
     UpdateWindow(browser->hwnd);
     return browser;

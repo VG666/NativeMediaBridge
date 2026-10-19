@@ -1,31 +1,43 @@
 @echo off
 rem ============================================================================
-rem build-test.bat —— 旁路构建：与 build-zig.bat 完全同参数，仅产物名不同
-rem   （bin\NativeMediaBridge-test.dll）。正式 DLL 常被运行中的宿主占用，
-rem   验证改动时先编旁路名，用宿主 --dll 指定它跑测试，验证通过再覆盖安装。
-rem zig 工具链位置说明见 build-zig.bat 头部注释。
+rem build-test.bat -- side build: identical to build-zig.bat but writes
+rem bin\NativeMediaBridge-test.dll. The production DLL is often locked by a
+rem running host, so verify changes with this one first, then rebuild normally.
+rem
+rem IMPORTANT: keep this file PURE ASCII (see build-zig.bat header): cmd.exe reads
+rem .bat bytes in the OEM codepage, UTF-8 Chinese comments break ^ continuations.
+rem ============================================================================
 setlocal
 cd /d "%~dp0"
 if not exist "bin" mkdir "bin"
 
 set "FSTATIC=ffmpeg-static"
-if exist ".toolchain\ffmpeg-static\lib" set "FSTATIC=.toolchain\ffmpeg-static"
+if exist ".toolchain\ffmpeg-static\lib\libavcodec.a" set "FSTATIC=.toolchain\ffmpeg-static"
+if not exist "%FSTATIC%\include\libavcodec\avcodec.h" (
+    echo [build-test] FFmpeg headers not found: %FSTATIC%\include\libavcodec\avcodec.h
+    exit /b 1
+)
+if not exist "%FSTATIC%\lib\libavcodec.a" (
+    echo [build-test] FFmpeg static libs not found: %FSTATIC%\lib\libavcodec.a
+    exit /b 1
+)
 
 set "ZIG="
-rem 本工作区没随 zig 工具链（约 760MB 没拷），实际用相邻原项目的：见下第 4 个候选。
-for %%D in (".toolchain\zig-x86_64-windows-0.15.2" ".toolchain-fixed" ".toolchain-fresh" ".toolchain") do (
-    if not defined ZIG if exist "%%~D\zig-x86_64-windows-0.15.2\zig.exe" set "ZIG=%%~D\zig-x86_64-windows-0.15.2\zig.exe"
+for %%D in ("zig-x86_64-windows-0.15.2" ".toolchain\zig-x86_64-windows-0.15.2" ".toolchain-fixed\zig-x86_64-windows-0.15.2" ".toolchain-fresh\zig-x86_64-windows-0.15.2") do (
+    if not defined ZIG if exist "%%~D\zig.exe" set "ZIG=%%~D\zig.exe"
 )
 if not defined ZIG for /f "delims=" %%P in ('where zig 2^>nul') do if not defined ZIG set "ZIG=%%P"
 if not defined ZIG (
-    echo [build-test] 找不到 zig.exe
+    echo [build-test] zig.exe not found.
+    echo [build-test] run: powershell -ExecutionPolicy Bypass -File .\download-toolchain.ps1
     exit /b 1
 )
-echo [build-test] 使用 %ZIG%
+echo [build-test] zig   : %ZIG%
+echo [build-test] ffmpeg: %FSTATIC%
 
 where python >nul 2>nul && (
-    python _nmb_gen_hooks_inc.py || exit /b 1
-) || echo [build-test] 未找到 python，沿用现有 hook\inc\*.inc
+    python "utility\_nmb_gen_hooks_inc.py" || exit /b 1
+) || echo [build-test] python not found, keeping existing hook\inc\*.inc
 
 "%ZIG%" c++ -target x86_64-windows-gnu -std=c++17 -O2 ^
     -DNMB_EXPORTS -DWIN32_LEAN_AND_MEAN -DNOMINMAX ^
@@ -40,8 +52,10 @@ where python >nul 2>nul && (
     -luser32 -lgdi32 -lwinmm -lkernel32 -luuid ^
     -o bin\NativeMediaBridge-test.dll
 if errorlevel 1 (
-    echo [build-test] 编译失败
+    echo [build-test] BUILD FAILED
     exit /b 1
 )
+del /q "bin\*.exp" "bin\*.lib" "bin\*.pdb" 2>nul
 echo [build-test] BUILD-OK
 dir /TW bin\NativeMediaBridge-test.dll | findstr /i NativeMediaBridge-test.dll
+endlocal
