@@ -146,16 +146,19 @@ html[data-nmb-fs-lock="1"]{transform:none!important;filter:none!important;perspe
 	background-color:transparent;
 	background-image:linear-gradient(90deg,currentColor 0%,currentColor 36%,transparent 36%,transparent 64%,currentColor 64%,currentColor 100%);
 }
-/* 全屏记号：两个伪元素画左上/右下 L 形括号。原来按钮里直接写字符 "⛶"，但内核的字体
+/* 全屏记号：四角展开（一个外框、四条边中间各断一段），由下方规则用 8 段渐变画出。原来按钮里直接写字符 "⛶"，但内核的字体
    没有这个字形（实测 ⛶ ◱ ⤢ ⇱ 全是空心豆腐块），只能用 CSS 画。
    clip-path 在这版内核里完全无效（computed 仍是 none，见 _probe_icon2），border 才靠得住。 */
-[data-nmb-controls] i.nmb-mark-fs{position:relative;width:16px;height:16px}
-[data-nmb-controls] i.nmb-mark-fs::before,
-[data-nmb-controls] i.nmb-mark-fs::after{
-	content:'';display:block;position:absolute;width:7px;height:7px;box-sizing:border-box;
+[data-nmb-controls] i.nmb-mark-fs{
+	/* 四角「放大/全屏」记号（R1）：外框 16x14、四角各 5px 臂、2px 线，
+	   四条边的中间缺口用 8 段纯色渐变画，不再用两个 L 角。
+	   用背景而不是塞子元素：<i> 里加节点容易被站点选择器/克隆干扰。 */
+	position:relative;width:16px;height:16px;
+	background-image:linear-gradient(currentColor,currentColor),linear-gradient(currentColor,currentColor),linear-gradient(currentColor,currentColor),linear-gradient(currentColor,currentColor),linear-gradient(currentColor,currentColor),linear-gradient(currentColor,currentColor),linear-gradient(currentColor,currentColor),linear-gradient(currentColor,currentColor);
+	background-repeat:no-repeat;
+	background-size:5px 2px,2px 5px,5px 2px,2px 5px,5px 2px,2px 5px,5px 2px,2px 5px;
+	background-position:0 1px,0 1px,100% 1px,100% 1px,0 13px,0 10px,100% 13px,100% 10px
 }
-[data-nmb-controls] i.nmb-mark-fs::before{left:0;top:0;border-left:2px solid currentColor;border-top:2px solid currentColor}
-[data-nmb-controls] i.nmb-mark-fs::after{right:0;bottom:0;border-right:2px solid currentColor;border-bottom:2px solid currentColor}
 
 /* 时间：定宽，数字跳变时布局不抖 */
 [data-nmb-controls] [data-nmb-cur],[data-nmb-controls] [data-nmb-total]{min-width:40px;font-family:Arial,sans-serif;font-size:12px}
