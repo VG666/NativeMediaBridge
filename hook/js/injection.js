@@ -651,6 +651,39 @@
       placeBar(el);
       return bar;
     }
+    // 播放/暂停按钮里只该有**一个**图标。过去的写法是"btn.__nmbMark 不在就补一个"，
+    // 而本内核里 DOM 节点上的 expando 出现过与实际节点树脱节的情况（属性还在，按钮里已经
+    // 被追加出好几个 <i>），于是每一轮又补一个，几秒后播放键里叠着一摞三角和竖条——
+    // 用户报的"三角和暂停循环显示、有时候叠加"就是这个。
+    // 现在以 DOM 为准：先摘掉按钮里多余的 i.nmb-mark（只留当前这个），再按需要写 class。
+    // class 用"不同才写"，每帧调用也不会产生样式失效。
+    function ensureMark(btn,shape){
+      var mk=btn.__nmbMark;
+      // expando 丢了（本内核不保证 JS 包装对象常驻）就**复用 DOM 里已有的那个**，
+      // 不要再造新的：否则每帧都造一个、上一帧的还留在按钮里，正是叠加的来源。
+      var kids=btn.getElementsByTagName('i'),keep=null;
+      for(var i=0;i<kids.length;i++){
+        var n=kids[i];
+        if(!(n.className&&String(n.className).indexOf('nmb-mark')>=0))continue;
+        if(n===mk||(!keep&&!mk))keep=n;
+      }
+      if(!mk&&keep){mk=keep;btn.__nmbMark=mk}
+      for(var i=kids.length-1;i>=0;i--){
+        var n=kids[i];
+        if(n===mk)continue;
+        if(n.className&&String(n.className).indexOf('nmb-mark')>=0){
+          try{btn.removeChild(n)}catch(e){}
+        }
+      }
+      if(!mk||mk.parentNode!==btn){
+        mk=btn.ownerDocument.createElement('i');
+        btn.appendChild(mk);
+        btn.__nmbMark=mk;
+      }
+      var want='nmb-mark '+shape;
+      if(mk.className!==want)mk.className=want;
+      return mk;
+    }
     function syncBar(el){
       var bar=el.__nmbBar;
       if(!bar)return;
@@ -665,12 +698,16 @@
       var cur=bar.querySelector('[data-nmb-cur]'),seek=bar.querySelector('[data-nmb-seek]'),
           total=bar.querySelector('[data-nmb-total]'),vol=bar.querySelector('[data-nmb-vol]');
       if(!btn||!cur||!seek||!total||!vol)return;
-      if(!btn.__nmbMark){var mk=bar.ownerDocument.createElement('i');mk.className='nmb-mark nmb-mark-play';btn.appendChild(mk);btn.__nmbMark=mk}
+      // 记号的"存在"不能只信 btn.__nmbMark 这个 expando：实测出现过 expando 与真实 DOM
+      // 不一致的情形——__nmbMark 还在，按钮里却已经被追加出好几个 <i>，于是每帧再补一个，
+      // 几秒后堆成一摞三角和竖条（用户报的"图标循环显示、有时候会叠加"）。
+      // 以 DOM 为准：同一个按钮里永远只留一个 i.nmb-mark，多出来的当场摘掉。
       var paused=!!s.paused;
+      ensureMark(btn,paused?'nmb-mark-play':'nmb-mark-pause');
       // 只在状态真的翻转时才改记号：syncAll 是每帧跑的，每帧写一次样式纯属白烧 CPU。
       if(btn.__nmbPaused!==paused){
         btn.__nmbPaused=paused;
-        btn.__nmbMark.className=paused?'nmb-mark nmb-mark-play':'nmb-mark nmb-mark-pause';
+        // 记号的 class 已经由上面的 ensureMark 写好（它每帧都跑、且不等 __nmbPaused），这里只更新无障碍文案。
         var label=paused?'播放':'暂停';btn.setAttribute('aria-label',label);btn.title=label;
       }
       // 拖动中（__busy）或 native 还在定位（__nmbSeeking）都绝不回写：回写就是用旧位置把滑块拽回去。

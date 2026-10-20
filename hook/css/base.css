@@ -124,8 +124,16 @@ html[data-nmb-fs-lock="1"]{transform:none!important;filter:none!important;perspe
 	display:flex;align-items:center;justify-content:center;
 	padding:0;border:0;background:transparent;color:#fff;cursor:pointer;
 }
-[data-nmb-controls] [data-nmb-play]{width:26px;height:26px}
-[data-nmb-controls] [data-nmb-fs]{width:26px;height:26px}
+[data-nmb-controls] [data-nmb-play],
+[data-nmb-controls] [data-nmb-fs]{
+	width:28px;height:28px;flex:0 0 auto;border-radius:4px;
+}
+/* 悬停/按下反馈：原来两个按钮都没有任何 hover/active 迹象，指针压上去毫无反应，
+   看着像"点了没用的图"。这里只改背景与颜色，不动尺寸（动尺寸会带动条重排）。 */
+[data-nmb-controls] [data-nmb-play]:hover,
+[data-nmb-controls] [data-nmb-fs]:hover{background:rgba(255,255,255,.16)}
+[data-nmb-controls] [data-nmb-play]:active,
+[data-nmb-controls] [data-nmb-fs]:active{background:rgba(255,255,255,.26)}
 
 /* 记号：按钮里唯一那个 <i>，纯 CSS 图形（三角=播放，双竖条=暂停）。
    不能用 SVG（内核 SVG 支持不牢，会整块画不出来只剩空框）。
@@ -149,13 +157,26 @@ html[data-nmb-fs-lock="1"]{transform:none!important;filter:none!important;perspe
 /* 全屏记号：两个伪元素画左上/右下 L 形括号。原来按钮里直接写字符 "⛶"，但内核的字体
    没有这个字形（实测 ⛶ ◱ ⤢ ⇱ 全是空心豆腐块），只能用 CSS 画。
    clip-path 在这版内核里完全无效（computed 仍是 none，见 _probe_icon2），border 才靠得住。 */
-[data-nmb-controls] i.nmb-mark-fs{position:relative;width:16px;height:16px}
-[data-nmb-controls] i.nmb-mark-fs::before,
-[data-nmb-controls] i.nmb-mark-fs::after{
-	content:'';display:block;position:absolute;width:7px;height:7px;box-sizing:border-box;
+/* 形状改版（2026-10-20，用户反馈"放大按钮样式"）：原来只有左上/右下两个 L 角，
+   7px 的角配 16px 的盒，右上与左下豁口过宽，放大看是"缺角的方框"，不像放大图标。
+   现在改四角：记号盒 18px，每个角由两条线（8px 长、2px 粗）拼成。
+   为什么不用四个伪元素/四个子节点：<i> 只能有 ::before/::after 两个伪元素，加子节点就得改 JS
+   的 buildBar/ensureMark（那里刚为"图标叠加"改成以 DOM 为准，不宜再动）。改用八层背景渐变：
+   四角各一条横线 + 一条竖线，用 background-position 贴到四个角 —— 纯 CSS、零额外节点、
+   在本内核（Chromium 60）实测正常渲染。
+   与 _probe_fs.html 里的 E 方案一致（该页同时验证过两角/四角/圆角/加粗几种画法的实际观感）。
+   注意渐变仍写成 "颜色,颜色" 两色形式（老内核不认双位置断点写法，见上面暂停记号的注释）。 */
+[data-nmb-controls] i.nmb-mark-fs{
+	width:18px;height:18px;
+	background-repeat:no-repeat;
+	background-image:
+		linear-gradient(currentColor,currentColor),linear-gradient(currentColor,currentColor),
+		linear-gradient(currentColor,currentColor),linear-gradient(currentColor,currentColor),
+		linear-gradient(currentColor,currentColor),linear-gradient(currentColor,currentColor),
+		linear-gradient(currentColor,currentColor),linear-gradient(currentColor,currentColor);
+	background-size:8px 2px,2px 8px,8px 2px,2px 8px,8px 2px,2px 8px,8px 2px,2px 8px;
+	background-position:0 0,0 0,100% 0,100% 0,0 100%,0 100%,100% 100%,100% 100%;
 }
-[data-nmb-controls] i.nmb-mark-fs::before{left:0;top:0;border-left:2px solid currentColor;border-top:2px solid currentColor}
-[data-nmb-controls] i.nmb-mark-fs::after{right:0;bottom:0;border-right:2px solid currentColor;border-bottom:2px solid currentColor}
 
 /* 时间：定宽，数字跳变时布局不抖 */
 [data-nmb-controls] [data-nmb-cur],[data-nmb-controls] [data-nmb-total]{min-width:40px;font-family:Arial,sans-serif;font-size:12px}
