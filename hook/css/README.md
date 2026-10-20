@@ -59,3 +59,31 @@ CSS 是**逐行**塞进 `var NMB_CSS=[...]` 的 JS 单引号字符串数组的�
 
 也就是说：改完 css 直接跑生成 + 编译即可，行尾不用手工处理；万一哪天又出现"编得过但页面空白"，
 先跑 `python _nmb_check_inc.py` 看注入的脚本是不是语法错。
+
+
+## 独立编辑页：controls.html（改样式不必同时开三份 css）
+
+`hook/css/controls.html` 是控件条的**独立单页**：条的 DOM（静态 HTML）与三份 css 的全部内容
+都内联在这一份文件里，不依赖任何外部文件，直接用浏览器打开就能改、按 F5 就能看效果。
+三份 css 的内容各自被这两行注释夹着（名字就是文件名）：
+
+    /* ===== NMB-EDIT-BEGIN base.css ===== */
+    ... 内容 ...
+    /* ===== NMB-EDIT-END base.css ===== */
+
+标记行别动，脚本靠它定位；页面自己的皮肤在 `style id="nmb-skin"` 里，不会被写回。
+
+改完应用回项目（项目根目录执行）：
+
+    python utility/_nmb_css_page.py                # 三段写回 hook/css/*.css（CRLF）
+    python utility/_nmb_css_page.py --gen --build  # 写回 + 生成 inc + 编译 DLL
+    python utility/_nmb_css_page.py --dry          # 只打印会改哪些行，不落盘
+    python utility/_nmb_css_page.py --to-html      # 反向：hook/css/*.css -> controls.html
+
+写回前会检查每段的花括号是否配平，不配平就报错停下、不落盘。
+
+`preview.html` 是另一份用途的页面：它用 `<link>` 直读本目录的真源 css，适合"我只想看看现在的
+css 长什么样"，改它不影响项目；两者外观都由真源 css 决定，`controls.html` 才是编辑＋写回的入口。
+
+注意：`controls.html` 里的条是 `hook/js/injection.js` 中 `buildBar` 的**镜像**。改结构
+（增删控件、改 `data-*` 名）必须同步改 `buildBar`，否则"页面看着一样、真机不一样"。

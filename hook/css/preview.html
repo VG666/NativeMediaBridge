@@ -125,7 +125,7 @@ function makeBar(host,audio){
   var vol=document.createElement('input');vol.type='range';vol.min='0';vol.max='100';vol.step='1';vol.value='100';
   vol.setAttribute('data-nmb-vol','1');vol.title='音量';
   bar.appendChild(btn);bar.appendChild(cur);bar.appendChild(seek);bar.appendChild(total);bar.appendChild(vol);
-  if(!audio){var fs=document.createElement('button');fs.type='button';fs.textContent='⛶';fs.setAttribute('data-nmb-fs','1');bar.appendChild(fs)}
+  if(!audio){var fs=document.createElement('button');fs.type='button';fs.setAttribute('data-nmb-fs','1');var fsm=document.createElement('i');fsm.className='nmb-mark nmb-mark-fs';fs.appendChild(fsm);bar.appendChild(fs)}
   // 本页把条**放进盒子里**，位置/宽度/高度全交给 CSS（见 <style> 里 .box>[data-nmb-controls] 那两条）。
   // 真实运行时是挂在 documentElement 下、由 placeBar 写视口坐标的 —— 因为原生帧画在页面之上，
   // 条得待在合成层里才能被 native 挖洞露出来。那是运行时的约束，预览页没有合成层，不必跟着背。
